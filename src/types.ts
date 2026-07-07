@@ -18,6 +18,8 @@ export interface VideoItem {
   extractedLinks?: string[];
   actualPurpose?: string;
   debunkedClickbait?: string;
+  conceptualComplexity?: string;
+  interdisciplinaryField?: string;
   transcript?: {
     highlightsSummary: string;
     segments: Array<{

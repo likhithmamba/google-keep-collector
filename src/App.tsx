@@ -16,6 +16,7 @@ import VideoCard from './components/VideoCard';
 import KeepPanel from './components/KeepPanel';
 import TasksPanel from './components/TasksPanel';
 import VideoDetailModal from './components/VideoDetailModal';
+import AcademicFocusMode from './components/AcademicFocusMode';
 import SettingsModal from './components/SettingsModal';
 import GuidedTour from './components/GuidedTour';
 import TopicDiscoveryGraph from './components/TopicDiscoveryGraph';
@@ -131,6 +132,7 @@ export default function App() {
   });
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [selectedVideo, setSelectedVideo] = useState<VideoItem | null>(null);
+  const [academicFocusMode, setAcademicFocusMode] = useState<boolean>(false);
 
   // Filter & Sort states
   const [activeCategory, setActiveCategory] = useState<string>('All');
@@ -486,6 +488,8 @@ export default function App() {
       takeaways: ['Click play or visit link to load your learning resource', 'Capture your custom ideas live inside your active Draft Keep Board'],
       actualPurpose: 'Custom Note Workspace',
       debunkedClickbait: '',
+      conceptualComplexity: 'Intermediate (advanced-undergraduate)',
+      interdisciplinaryField: 'Self-Directed Learning',
       watchedStatus: 'Watching',
       createdAt: new Date().toISOString()
     };
@@ -581,6 +585,8 @@ ${video.takeaways.map((t, i) => `• ${t}`).join('\n')}`;
 
     try {
       const taskNotes = `📌 Category: ${video.category}
+📊 Conceptual Complexity: ${video.conceptualComplexity || 'Not Analyzed'}
+🌀 Interdisciplinary Field: ${video.interdisciplinaryField || 'Not Analyzed'}
 ⭐ Curation Rating: ${video.rating}/5 stars
 🔗 Watch: ${video.url}
 
@@ -738,7 +744,7 @@ Synced via CurateMind AI`;
       const syncErrors: string[] = [];
 
       for (const video of videosToSync) {
-        const taskNotes = `📌 Category: ${video.category}\nChannel: ${video.channelTitle}\nURL: ${video.url}\n⭐ Rating: ${video.rating}/5 stars\n"${video.ratingJustification}"\n\n📝 SUMMARY:\n${video.summary}\n\n🔑 STUDY WORKSPACE CHECKLIST:\n${video.takeaways.map((t, idx) => `[ ] ${t}`).join('\n')}\n\n---\nSynced via CurateMind AI`;
+        const taskNotes = `📌 Category: ${video.category}\n📊 Conceptual Complexity: ${video.conceptualComplexity || 'Not Analyzed'}\n🌀 Interdisciplinary Field: ${video.interdisciplinaryField || 'Not Analyzed'}\nChannel: ${video.channelTitle}\nURL: ${video.url}\n⭐ Rating: ${video.rating}/5 stars\n"${video.ratingJustification}"\n\n📝 SUMMARY:\n${video.summary}\n\n🔑 STUDY WORKSPACE CHECKLIST:\n${video.takeaways.map((t, idx) => `[ ] ${t}`).join('\n')}\n\n---\nSynced via CurateMind AI`;
 
         let anySuccess = false;
         for (const account of activeAccounts) {
@@ -871,6 +877,25 @@ Synced via CurateMind AI`;
       return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
     });
 
+  if (academicFocusMode) {
+    const focusVideo = selectedVideo || videos[0];
+    if (focusVideo) {
+      return (
+        <AcademicFocusMode
+          video={focusVideo}
+          videos={videos}
+          onSelectVideo={(v) => setSelectedVideo(v)}
+          onUpdateVideo={handleUpdateVideo}
+          onExit={() => setAcademicFocusMode(false)}
+          onSaveToKeep={handleSaveToKeep}
+          onSyncTasks={handleSyncToGoogleTasks}
+          isSyncedToTasks={syncedTaskIds.includes(focusVideo.id)}
+          isInKeep={keepNotes.some(note => note.id === `keep-${focusVideo.id}` || note.videoId === focusVideo.id)}
+        />
+      );
+    }
+  }
+
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col antialiased selection:bg-indigo-100 selection:text-indigo-950">
       
@@ -902,6 +927,21 @@ Synced via CurateMind AI`;
             >
               <Sparkles className="w-4.5 h-4.5 text-amber-500 fill-amber-500/10" />
               <span className="hidden sm:inline text-amber-800 font-extrabold text-xs">Guided Tour</span>
+            </button>
+
+            {/* Academic Focus Button */}
+            <button
+              onClick={() => {
+                if (!selectedVideo && videos.length > 0) {
+                  setSelectedVideo(videos[0]);
+                }
+                setAcademicFocusMode(true);
+              }}
+              className="flex items-center gap-1.5 px-3 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 hover:text-indigo-800 rounded-xl text-xs font-bold transition-all cursor-pointer shadow-2xs border border-indigo-200/40"
+              title="Enter distraction-free Academic Focus Mode"
+            >
+              <BookOpen className="w-4.5 h-4.5 text-indigo-500" />
+              <span className="hidden sm:inline text-indigo-800 font-extrabold text-xs">Academic Focus</span>
             </button>
 
             {/* Settings Button */}

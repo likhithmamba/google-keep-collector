@@ -446,6 +446,8 @@ STUDY WORKSPACE REPORT: ${video.title}
 ===========================================================
 Channel: ${video.channelTitle}
 Category: ${video.category}
+Conceptual Complexity: ${video.conceptualComplexity || 'Not Analyzed'}
+Interdisciplinary Field: ${video.interdisciplinaryField || 'Not Analyzed'}
 Video Link: ${video.url}
 Curation Rating: ${video.rating}/5 stars
 
@@ -658,6 +660,20 @@ Report generated via CurateMind AI Workspace on ${new Date().toLocaleString()}
                 <span className="text-[10px] font-bold tracking-wider uppercase bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-md">
                   {video.category}
                 </span>
+                
+                {video.conceptualComplexity && (
+                  <span className="text-[10px] font-bold tracking-wider uppercase bg-indigo-100 text-indigo-800 border border-indigo-200 px-2 py-0.5 rounded-md flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500"></span>
+                    <span>Complexity: {video.conceptualComplexity}</span>
+                  </span>
+                )}
+
+                {video.interdisciplinaryField && (
+                  <span className="text-[10px] font-bold tracking-wider uppercase bg-violet-100 text-violet-800 border border-violet-200 px-2 py-0.5 rounded-md flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-violet-500"></span>
+                    <span>Field: {video.interdisciplinaryField}</span>
+                  </span>
+                )}
                 
                 {/* Watched Status Interactive Toggle inside modal */}
                 <div className="flex items-center gap-1 bg-slate-100 p-0.5 rounded-lg border border-slate-200">

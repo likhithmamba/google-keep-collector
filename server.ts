@@ -98,7 +98,10 @@ Please provide a highly complete analysis of this resource:
    - 'Lifestyle & Health': "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?auto=format&fit=crop&w=400&q=80"
    - Otherwise, default to: "${defaultThumbnail}"
 4. An exceptionally detailed, highly engaging, and informative comprehensive summary explaining all main concepts, methodologies, examples, and steps covered in the resource. The summary must be highly thorough and exhaustive, structured in 3-4 dense, detailed paragraphs rather than a brief overview. Detail specific technical terms, theories, arguments, examples, or steps mentioned.
-5. A highly granular, precise, academic-grade/scholarly category or domain area that perfectly fits the content of the resource (e.g., 'Cognitive Neuroscience', 'Distributed Systems', 'Applied Cryptography', 'Behavioral Economics', 'Acoustic Engineering', 'Reinforcement Learning', 'Information Architecture', 'Human-Computer Interaction', 'Epistemology & Education', 'Compiler Design', 'Stochastic Optimization'). Avoid generic, overly-broad classifications. Do not limit yourself to a static list.
+5. A multi-stage classification pipeline mapping:
+   - "category": A highly granular, precise, academic-grade/scholarly category or domain area that perfectly fits the content of the resource (e.g., 'Cognitive Neuroscience', 'Distributed Systems', 'Applied Cryptography', 'Behavioral Economics', 'Acoustic Engineering', 'Reinforcement Learning', 'Information Architecture', 'Human-Computer Interaction', 'Epistemology & Education', 'Compiler Design', 'Stochastic Optimization'). Avoid generic, overly-broad classifications. Do not limit yourself to a static list.
+   - "conceptualComplexity": The depth of conceptual complexity of the material (e.g., 'Introductory (undergraduate-level)', 'Intermediate (advanced-undergraduate)', 'Advanced (graduate/practitioner)', 'PhD-grade/Cutting-edge research', or 'Specialized Technical').
+   - "interdisciplinaryField": The interdisciplinary field or domain crossover of the resource (e.g., 'Bioinformatics', 'Neuro-symbolic AI', 'Quantum Chemistry', 'Computational Linguistics', 'Complex Systems theory', etc.). If none, select a fitting scholastic blend.
 6. An honest rating based on estimated educational value, execution quality, and instructional clarity.
 7. Descriptive and actionable takeaways.
 8. A clickbait buster assessment. Often titles are highly sensationalized, vague, or misleading. Formulate:
@@ -121,7 +124,7 @@ Please provide a highly complete analysis of this resource:
           messages: [
             {
               role: "user",
-              content: prompt + "\n\nIMPORTANT: Return ONLY a valid JSON object matching the requested schema. Ensure the response strictly parses as JSON with properties: 'title' (string), 'channelTitle' (string), 'thumbnail' (string), 'summary' (string), 'category' (string), 'rating' (integer), 'ratingJustification' (string), 'takeaways' (array of strings), 'actualPurpose' (string), and 'debunkedClickbait' (string)."
+              content: prompt + "\n\nIMPORTANT: Return ONLY a valid JSON object matching the requested schema. Ensure the response strictly parses as JSON with properties: 'title' (string), 'channelTitle' (string), 'thumbnail' (string), 'summary' (string), 'category' (string), 'conceptualComplexity' (string), 'interdisciplinaryField' (string), 'rating' (integer), 'ratingJustification' (string), 'takeaways' (array of strings), 'actualPurpose' (string), and 'debunkedClickbait' (string)."
             }
           ],
           response_format: { type: "json_object" }
@@ -203,6 +206,14 @@ Please provide a highly complete analysis of this resource:
               type: Type.STRING,
               description: "A highly granular, precise, academic-grade/scholarly category or domain area that perfectly fits the content of the resource (e.g., 'Cognitive Neuroscience', 'Distributed Systems', 'Applied Cryptography', 'Behavioral Economics', 'Acoustic Engineering', 'Reinforcement Learning', 'Information Architecture', 'Human-Computer Interaction', 'Epistemology & Education', 'Compiler Design', 'Stochastic Optimization'). Avoid generic, overly-broad classifications."
             },
+            conceptualComplexity: {
+              type: Type.STRING,
+              description: "The depth of conceptual complexity of the material (e.g., 'Introductory (undergraduate-level)', 'Intermediate (advanced-undergraduate)', 'Advanced (graduate/practitioner)', 'PhD-grade/Cutting-edge research', or 'Specialized Technical')."
+            },
+            interdisciplinaryField: {
+              type: Type.STRING,
+              description: "The interdisciplinary field or domain crossover of the resource (e.g., 'Bioinformatics', 'Neuro-symbolic AI', 'Quantum Chemistry', 'Computational Linguistics', 'Complex Systems theory', etc.). If none, select a fitting scholastic blend."
+            },
             rating: {
               type: Type.INTEGER,
               description: "A suggested rating from 1 to 5 stars."
@@ -225,7 +236,7 @@ Please provide a highly complete analysis of this resource:
               description: "A 1-2 sentence objective comparison of the sensationalized title/thumbnail hype vs. what the resource realistically covers."
             }
           },
-          required: ["title", "channelTitle", "thumbnail", "summary", "category", "rating", "ratingJustification", "takeaways", "actualPurpose", "debunkedClickbait"]
+          required: ["title", "channelTitle", "thumbnail", "summary", "category", "conceptualComplexity", "interdisciplinaryField", "rating", "ratingJustification", "takeaways", "actualPurpose", "debunkedClickbait"]
         }
       }
     });

@@ -140,8 +140,8 @@ export default function KeepPanel({
               onClick={() => onTogglePin(note.id)}
               className={`absolute top-3 right-3 p-1 rounded-lg transition-all cursor-pointer ${
                 note.pinned 
-                  ? 'text-amber-500 bg-amber-500/10' 
-                  : 'text-slate-400 hover:text-slate-700 hover:bg-slate-100 opacity-0 group-hover/card:opacity-100'
+                  ? 'text-indigo-600 bg-indigo-50 border border-indigo-150' 
+                  : 'text-slate-400 hover:text-indigo-600 hover:bg-indigo-50 opacity-0 group-hover/card:opacity-100'
               }`}
               title={note.pinned ? 'Unpin Note' : 'Pin Note'}
             >
@@ -159,7 +159,7 @@ export default function KeepPanel({
               {note.content}
             </p>
             {note.content.length > 150 && (
-              <span className="text-[9px] text-amber-600 font-black tracking-wider uppercase block mt-1.5 hover:text-amber-700 transition-colors">
+              <span className="text-[9px] text-indigo-600 font-black tracking-wider uppercase block mt-1.5 hover:text-indigo-700 transition-colors">
                 {isExpanded ? '▲ Collapse Note' : '▼ Expand Note'}
               </span>
             )}

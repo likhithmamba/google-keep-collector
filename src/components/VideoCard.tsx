@@ -276,6 +276,24 @@ Compiled via CurateMind AI Academic Workspace`;
           {video.title}
         </h3>
 
+        {/* Academic Tags (Complexity & Interdisciplinary) */}
+        {(video.conceptualComplexity || video.interdisciplinaryField) && (
+          <div className="flex flex-wrap gap-1.5 mb-2.5">
+            {video.conceptualComplexity && (
+              <span className="text-[10px] font-semibold bg-indigo-50 border border-indigo-100 text-indigo-700 px-2.5 py-0.5 rounded-md flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                <span>{video.conceptualComplexity}</span>
+              </span>
+            )}
+            {video.interdisciplinaryField && (
+              <span className="text-[10px] font-semibold bg-violet-50 border border-violet-100 text-violet-700 px-2.5 py-0.5 rounded-md flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-violet-500 animate-pulse"></span>
+                <span>{video.interdisciplinaryField}</span>
+              </span>
+            )}
+          </div>
+        )}
+
         {/* Clickbait Buster / Actual Core Purpose Banner */}
         <div className="bg-slate-50 border border-slate-100 rounded-xl p-2.5 mb-3 text-[11px] leading-relaxed text-slate-700 hover:bg-amber-50/20 hover:border-amber-100/50 transition-all">
           <div className="flex items-center gap-1 mb-1 font-extrabold text-amber-600 uppercase tracking-wider text-[9px]">

@@ -19,6 +19,8 @@ export const presetVideos: VideoItem[] = [
       'Allows developers to ingest complete code repositories for instant debugging.'
     ],
     createdAt: '2026-07-06T10:00:00Z',
+    conceptualComplexity: 'Advanced (graduate/practitioner)',
+    interdisciplinaryField: 'AI & Large Scale Computing',
     isPinned: true,
     keepNoteColor: '#FEF7E0' // Keep Warm Yellow
   },
@@ -40,6 +42,8 @@ export const presetVideos: VideoItem[] = [
       'Represents a major shift from passive code autocomplete to active coding agents.'
     ],
     createdAt: '2026-07-06T10:10:00Z',
+    conceptualComplexity: 'Intermediate (advanced-undergraduate)',
+    interdisciplinaryField: 'Autonomous Agents & Software Engineering',
     isPinned: false,
     keepNoteColor: '#E8F0FE' // Keep Blue
   },
@@ -61,6 +65,8 @@ export const presetVideos: VideoItem[] = [
       'Use tracking (letter-spacing) intentionally for display headings.'
     ],
     createdAt: '2026-07-06T10:20:00Z',
+    conceptualComplexity: 'Introductory (undergraduate-level)',
+    interdisciplinaryField: 'Human-Computer Interaction & Visual Arts',
     isPinned: false,
     keepNoteColor: '#E6F4EA' // Keep Green
   },
@@ -82,6 +88,8 @@ export const presetVideos: VideoItem[] = [
       'Regularly archive notes to keep the main canvas clean and organized.'
     ],
     createdAt: '2026-07-06T10:30:00Z',
+    conceptualComplexity: 'Introductory (undergraduate-level)',
+    interdisciplinaryField: 'Personal Knowledge Management & Cognitive Psychology',
     isPinned: true,
     keepNoteColor: '#FEEFC3' // Keep Amber/Yellow
   },
@@ -103,6 +111,8 @@ export const presetVideos: VideoItem[] = [
       'Incorporate structured spacing intervals to cement memories permanently.'
     ],
     createdAt: '2026-07-06T10:40:00Z',
+    conceptualComplexity: 'Intermediate (advanced-undergraduate)',
+    interdisciplinaryField: 'Cognitive Science & Educational Epistemology',
     isPinned: false,
     keepNoteColor: '#FCE8E6' // Keep Red/Pink
   }
