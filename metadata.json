@@ -1,0 +1,6 @@
+{
+  "name": "CurateMind AI",
+  "description": "An academic-grade educational workspace for curating, synthesizing, and analyzing research resources using Gemini AI and interactive topology graphs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
