@@ -1,3 +1,10 @@
+export interface Bookmark {
+  id: string;
+  timestamp: string;
+  note: string;
+  createdAt: string;
+}
+
 export interface VideoItem {
   id: string;
   videoId: string;
@@ -20,8 +27,15 @@ export interface VideoItem {
   debunkedClickbait?: string;
   conceptualComplexity?: string;
   interdisciplinaryField?: string;
+  conceptTags?: string[];
+  leitnerBox?: number;
+  nextReviewDate?: string;
+  lastReviewedDate?: string;
+  lastWatchedDate?: string;
+  bookmarks?: Bookmark[];
   transcript?: {
     highlightsSummary: string;
+    isVerified?: boolean;
     segments: Array<{
       timestamp: string;
       speaker: string;

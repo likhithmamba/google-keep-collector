@@ -20,6 +20,8 @@ import AcademicFocusMode from './components/AcademicFocusMode';
 import SettingsModal from './components/SettingsModal';
 import GuidedTour from './components/GuidedTour';
 import TopicDiscoveryGraph from './components/TopicDiscoveryGraph';
+import KeepImportModal from './components/KeepImportModal';
+import LeitnerStudyPanel from './components/LeitnerStudyPanel';
 import { 
   Sparkles, 
   Youtube, 
@@ -46,7 +48,8 @@ import {
   Headphones,
   Plus,
   ExternalLink,
-  Music
+  Music,
+  Flame
 } from 'lucide-react';
 
 // Helper functions for base64 local storage obscurity
@@ -83,6 +86,38 @@ const extractUrlsFromText = (text: string): string[] => {
   const urlRegex = /(https?:\/\/[^\s\n\r"']+)/gi;
   const matches = text.match(urlRegex);
   return matches ? Array.from(new Set(matches)) : [];
+};
+
+const calculateStreak = (videos: VideoItem[]): number => {
+  const activeDates = videos
+    .map(v => v.lastWatchedDate || v.lastReviewedDate)
+    .filter(Boolean)
+    .map(d => new Date(d!).toDateString());
+  
+  const uniqueDates = Array.from(new Set(activeDates))
+    .map(d => new Date(d).getTime())
+    .sort((a, b) => b - a); // newest to oldest
+  
+  if (uniqueDates.length === 0) return 0;
+  
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  const todayStart = new Date(new Date().toDateString()).getTime();
+  
+  // If the latest study date is older than 48 hours, streak is reset
+  if (todayStart - uniqueDates[0] > 2 * oneDayMs) {
+    return 0;
+  }
+  
+  let streak = 1;
+  for (let i = 0; i < uniqueDates.length - 1; i++) {
+    const diff = uniqueDates[i] - uniqueDates[i+1];
+    if (diff <= 1.5 * oneDayMs) { // within 36 hours or same day
+      streak++;
+    } else {
+      break;
+    }
+  }
+  return streak;
 };
 
 export default function App() {
@@ -179,8 +214,13 @@ export default function App() {
   });
 
   // Right panel tab and task sync triggers
-  const [rightPanelTab, setRightPanelTab] = useState<'keep' | 'tasks'>('keep');
+  const [rightPanelTab, setRightPanelTab] = useState<'keep' | 'tasks' | 'study'>('keep');
   const [tasksTrigger, setTasksTrigger] = useState(0);
+
+  // New Marginalia Study & Import States
+  const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [activeConcept, setActiveConcept] = useState<string | null>(null);
+  const [bookshelfLayout, setBookshelfLayout] = useState<'grid' | 'kanban'>('grid');
 
   // Multi-select state
   const [isBulkSyncing, setIsBulkSyncing] = useState<boolean>(false);
@@ -210,6 +250,8 @@ export default function App() {
     });
     return urls;
   }, [keepNotes]);
+
+  const currentStreak = useMemo(() => calculateStreak(videos), [videos]);
 
   // Dynamic categories computed based on current videos list and default presets
   const dynamicCategories = useMemo(() => {
@@ -900,25 +942,57 @@ Synced via CurateMind AI`;
     <div className="min-h-screen bg-slate-50 flex flex-col antialiased selection:bg-indigo-100 selection:text-indigo-950">
       
       {/* Header Bar */}
-      <header className="sticky top-0 z-40 bg-white border-b border-slate-200 shadow-xs backdrop-blur-md bg-white/90">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="relative w-10 h-10 bg-gradient-to-tr from-indigo-600 via-indigo-500 to-sky-400 rounded-2xl flex items-center justify-center text-white font-bold text-xl shadow-md shadow-indigo-600/15 shrink-0">
-              <BookOpen className="w-5 h-5 text-white" />
-              <div className="absolute -bottom-1 -right-1 bg-slate-900 text-white rounded-lg p-0.5 border border-white shadow-xs">
-                <Sparkles className="w-3 h-3 fill-amber-400 stroke-none text-amber-400" />
-              </div>
+      <header className="sticky top-0 z-40 bg-white border-b border-slate-200/60 shadow-xs backdrop-blur-md bg-white/90">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between">
+          <div className="flex items-center gap-3.5">
+            {/* Real-life Marginalia Folded Page Logo */}
+            <div 
+              className="relative w-8 h-[36px] bg-brand-ink rounded-l-[6px] rounded-br-[6px] shrink-0 shadow-xs group cursor-pointer transition-transform duration-300 hover:scale-[1.03]"
+              style={{
+                clipPath: 'polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%)'
+              }}
+              id="brand-logo"
+            >
+              {/* Red folded corner flap */}
+              <div 
+                className="absolute top-0 right-0 w-[10px] h-[10px] bg-brand-red origin-top-left transition-all duration-300 ease-out group-hover:scale-130 group-hover:-rotate-[10deg] group-hover:brightness-110 animate-flap-flare"
+                style={{
+                  clipPath: 'polygon(0 0, 100% 100%, 0 100%)'
+                }}
+              />
             </div>
-            <div>
-              <h1 className="text-xl font-black font-display tracking-tight text-slate-900 flex items-center gap-1">
-                CurateMind<span className="text-indigo-600">AI</span>
-                <span className="text-[10px] font-black uppercase bg-indigo-600 text-white border border-transparent px-2 py-0.5 rounded-md ml-1 tracking-wider">Workspace</span>
+            
+            <div className="flex flex-col justify-center">
+              <h1 className="text-xl md:text-2xl font-semibold font-serif tracking-tight text-brand-ink leading-tight select-none flex items-center gap-1.5">
+                Marginalia
               </h1>
-              <p className="text-[11px] text-slate-500 font-sans hidden sm:block">Academic-grade educational curation, video synthesis, and concept mapping engine</p>
+              <span className="text-[9px] font-black tracking-[0.25em] text-brand-red uppercase leading-none block mt-0.5 select-none">
+                Curation, Verified
+              </span>
             </div>
           </div>
 
           <div className="flex items-center gap-3">
+            {/* Dynamic Leitner Streak Indicator */}
+            {currentStreak > 0 ? (
+              <button 
+                onClick={() => setRightPanelTab('study')}
+                className="flex items-center gap-1.5 px-3 py-2 bg-rose-50 hover:bg-rose-100 border border-rose-200/50 rounded-xl text-xs font-bold shadow-2xs cursor-pointer transition-colors"
+                title={`You have a ${currentStreak}-day educational study streak active! Keep reviewing flashcards to maintain your streak.`}
+              >
+                <Flame className="w-4.5 h-4.5 text-[#C4342B] fill-[#C4342B] animate-pulse" />
+                <span className="text-[#C4342B] font-black">{currentStreak} Day Streak</span>
+              </button>
+            ) : (
+              <div 
+                className="hidden md:flex items-center gap-1.5 px-3 py-2 bg-slate-50 border border-slate-200/50 rounded-xl text-xs font-bold text-slate-400"
+                title="Start watching or reviewing videos to build your active learning streak!"
+              >
+                <Flame className="w-4 h-4 text-slate-300" />
+                <span>0 Day Streak</span>
+              </div>
+            )}
+
             {/* Guided Tour Button */}
             <button
               onClick={() => setIsTourOpen(true)}
@@ -988,13 +1062,13 @@ Synced via CurateMind AI`;
             <TopicDiscoveryGraph 
               videos={videos}
               onSelectVideo={setSelectedVideo}
-              onSelectCategory={setActiveCategory}
-              activeCategory={activeCategory}
+              onSelectConcept={setActiveConcept}
+              activeConcept={activeConcept}
             />
           )}
 
           {/* Filters & Control Station */}
-          <div id="onboarding-bookshelf" className="space-y-6">
+          <div id="onboarding-bookshelf" className="space-y-6 lg:space-y-8 xl:space-y-10">
             <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4">
               
               {/* Row 1: Search & Sorts */}
@@ -1011,6 +1085,34 @@ Synced via CurateMind AI`;
                 </div>
 
                 <div className="flex items-center gap-3 shrink-0">
+                  {/* Bookshelf Layout Switcher */}
+                  <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setBookshelfLayout('grid')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        bookshelfLayout === 'grid'
+                          ? 'bg-white text-slate-800 shadow-2xs border border-slate-200/20'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                      title="Grid Layout View"
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setBookshelfLayout('kanban')}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                        bookshelfLayout === 'kanban'
+                          ? 'bg-white text-slate-800 shadow-2xs border border-slate-200/20 font-black'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                      title="Study Progress Kanban Board"
+                    >
+                      <SlidersHorizontal className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
                   {/* Rating Filter Selector */}
                   <div className="flex items-center gap-1.5 border border-slate-200 rounded-xl px-3 py-2 bg-slate-50">
                     <span className="text-[10px] font-bold text-slate-500">Stars:</span>
@@ -1170,25 +1272,131 @@ Synced via CurateMind AI`;
 
               {videos.length > 0 ? (
                 processedVideos.length > 0 ? (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                    {processedVideos.map((video) => (
-                      <VideoCard
-                        key={video.id}
-                        video={video}
-                        onPin={handlePinVideo}
-                        onDelete={handleDeleteVideo}
-                        onSaveToKeep={handleSaveToKeep}
-                        onSyncTasks={handleSyncToGoogleTasks}
-                        isSyncedToTasks={syncedTaskIds.includes(video.id)}
-                        isInKeep={keepNotes.some(note => note.videoId === video.id)}
-                        onSelect={setSelectedVideo}
-                        isSelected={selectedVideoIds.includes(video.id)}
-                        onToggleSelect={handleToggleSelectVideo}
-                        isSelectionMode={selectedVideoIds.length > 0}
-                        onChangeWatchedStatus={handleToggleWatchedStatus}
-                      />
-                    ))}
-                  </div>
+                  bookshelfLayout === 'kanban' ? (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5 lg:gap-6 xl:gap-8">
+                      {/* Column 1: To Watch */}
+                      <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 flex flex-col space-y-3 min-h-[480px]">
+                        <div className="flex items-center justify-between px-1">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-slate-500">⏳ To Watch</span>
+                          <span className="text-[10px] font-bold text-slate-400 bg-slate-200/50 px-2.5 py-0.5 rounded-full">
+                            {processedVideos.filter(v => (v.watchedStatus || 'To Watch') === 'To Watch').length}
+                          </span>
+                        </div>
+                        <div className="space-y-4 flex-1 overflow-y-auto max-h-[550px] scrollbar-thin pr-0.5">
+                          {processedVideos.filter(v => (v.watchedStatus || 'To Watch') === 'To Watch').map((video) => (
+                            <VideoCard
+                              key={video.id}
+                              video={video}
+                              onPin={handlePinVideo}
+                              onDelete={handleDeleteVideo}
+                              onSaveToKeep={handleSaveToKeep}
+                              onSyncTasks={handleSyncToGoogleTasks}
+                              isSyncedToTasks={syncedTaskIds.includes(video.id)}
+                              isInKeep={keepNotes.some(note => note.videoId === video.id)}
+                              onSelect={setSelectedVideo}
+                              isSelected={selectedVideoIds.includes(video.id)}
+                              onToggleSelect={handleToggleSelectVideo}
+                              isSelectionMode={selectedVideoIds.length > 0}
+                              onChangeWatchedStatus={handleToggleWatchedStatus}
+                            />
+                          ))}
+                          {processedVideos.filter(v => (v.watchedStatus || 'To Watch') === 'To Watch').length === 0 && (
+                            <div className="flex flex-col items-center justify-center py-16 border border-dashed border-slate-200 rounded-2xl text-slate-400 text-center">
+                              <p className="text-[10px] font-bold">No videos queued</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Column 2: Watching */}
+                      <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 flex flex-col space-y-3 min-h-[480px]">
+                        <div className="flex items-center justify-between px-1">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-indigo-700">📺 Watching</span>
+                          <span className="text-[10px] font-bold text-indigo-600 bg-indigo-100/50 px-2.5 py-0.5 rounded-full">
+                            {processedVideos.filter(v => v.watchedStatus === 'Watching').length}
+                          </span>
+                        </div>
+                        <div className="space-y-4 flex-1 overflow-y-auto max-h-[550px] scrollbar-thin pr-0.5">
+                          {processedVideos.filter(v => v.watchedStatus === 'Watching').map((video) => (
+                            <VideoCard
+                              key={video.id}
+                              video={video}
+                              onPin={handlePinVideo}
+                              onDelete={handleDeleteVideo}
+                              onSaveToKeep={handleSaveToKeep}
+                              onSyncTasks={handleSyncToGoogleTasks}
+                              isSyncedToTasks={syncedTaskIds.includes(video.id)}
+                              isInKeep={keepNotes.some(note => note.videoId === video.id)}
+                              onSelect={setSelectedVideo}
+                              isSelected={selectedVideoIds.includes(video.id)}
+                              onToggleSelect={handleToggleSelectVideo}
+                              isSelectionMode={selectedVideoIds.length > 0}
+                              onChangeWatchedStatus={handleToggleWatchedStatus}
+                            />
+                          ))}
+                          {processedVideos.filter(v => v.watchedStatus === 'Watching').length === 0 && (
+                            <div className="flex flex-col items-center justify-center py-16 border border-dashed border-slate-200 rounded-2xl text-slate-400 text-center">
+                              <p className="text-[10px] font-bold">No active study sessions</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Column 3: Done */}
+                      <div className="bg-slate-50 border border-slate-200/60 rounded-2xl p-4 flex flex-col space-y-3 min-h-[480px]">
+                        <div className="flex items-center justify-between px-1">
+                          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700">✅ Done</span>
+                          <span className="text-[10px] font-bold text-emerald-600 bg-emerald-100/50 px-2.5 py-0.5 rounded-full">
+                            {processedVideos.filter(v => v.watchedStatus === 'Done').length}
+                          </span>
+                        </div>
+                        <div className="space-y-4 flex-1 overflow-y-auto max-h-[550px] scrollbar-thin pr-0.5">
+                          {processedVideos.filter(v => v.watchedStatus === 'Done').map((video) => (
+                            <VideoCard
+                              key={video.id}
+                              video={video}
+                              onPin={handlePinVideo}
+                              onDelete={handleDeleteVideo}
+                              onSaveToKeep={handleSaveToKeep}
+                              onSyncTasks={handleSyncToGoogleTasks}
+                              isSyncedToTasks={syncedTaskIds.includes(video.id)}
+                              isInKeep={keepNotes.some(note => note.videoId === video.id)}
+                              onSelect={setSelectedVideo}
+                              isSelected={selectedVideoIds.includes(video.id)}
+                              onToggleSelect={handleToggleSelectVideo}
+                              isSelectionMode={selectedVideoIds.length > 0}
+                              onChangeWatchedStatus={handleToggleWatchedStatus}
+                            />
+                          ))}
+                          {processedVideos.filter(v => v.watchedStatus === 'Done').length === 0 && (
+                            <div className="flex flex-col items-center justify-center py-16 border border-dashed border-slate-200 rounded-2xl text-slate-400 text-center">
+                              <p className="text-[10px] font-bold">No completed studies yet</p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 lg:gap-8 xl:gap-10">
+                      {processedVideos.map((video) => (
+                        <VideoCard
+                          key={video.id}
+                          video={video}
+                          onPin={handlePinVideo}
+                          onDelete={handleDeleteVideo}
+                          onSaveToKeep={handleSaveToKeep}
+                          onSyncTasks={handleSyncToGoogleTasks}
+                          isSyncedToTasks={syncedTaskIds.includes(video.id)}
+                          isInKeep={keepNotes.some(note => note.videoId === video.id)}
+                          onSelect={setSelectedVideo}
+                          isSelected={selectedVideoIds.includes(video.id)}
+                          onToggleSelect={handleToggleSelectVideo}
+                          isSelectionMode={selectedVideoIds.length > 0}
+                          onChangeWatchedStatus={handleToggleWatchedStatus}
+                        />
+                      ))}
+                    </div>
+                  )
                 ) : (
                   <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center flex flex-col items-center justify-center text-slate-400">
                     <LayoutGrid className="w-12 h-12 text-slate-200 mb-3" />
@@ -1220,7 +1428,7 @@ Synced via CurateMind AI`;
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 relative z-10">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 lg:gap-8 xl:gap-10 relative z-10">
                     {/* How it works */}
                     <div className="bg-slate-50/50 border border-slate-150 rounded-2xl p-5 space-y-4">
                       <h4 className="text-xs font-black text-slate-800 uppercase tracking-wider flex items-center gap-1.5">
@@ -1320,29 +1528,43 @@ Synced via CurateMind AI`;
         {/* Right 4 Columns: Keep Panel Clipboard & Tasks */}
         <div id="onboarding-keep-panel" className="lg:col-span-4 flex flex-col h-full space-y-4">
           {/* Workspace Side Panel Tabs */}
-          <div className="flex bg-slate-100 p-1.5 rounded-2xl border border-slate-200 shrink-0">
+          <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 shrink-0">
             <button
               onClick={() => setRightPanelTab('keep')}
-              className={`flex-1 flex items-center justify-center gap-2 text-xs font-bold py-2.5 rounded-xl transition-all cursor-pointer ${
+              className={`flex-1 flex items-center justify-center gap-1.5 text-[10px] font-bold py-2 rounded-xl transition-all cursor-pointer ${
                 rightPanelTab === 'keep' 
-                  ? 'bg-white text-slate-800 shadow-xs border border-slate-200/30' 
+                  ? 'bg-white text-slate-800 shadow-xs border border-slate-200/30 font-black' 
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-              <span>Draft Keep Board</span>
+              <span>Keep Board</span>
             </button>
             <button
               id="onboarding-tasks-tab"
               onClick={() => setRightPanelTab('tasks')}
-              className={`flex-1 flex items-center justify-center gap-2 text-xs font-bold py-2.5 rounded-xl transition-all cursor-pointer ${
+              className={`flex-1 flex items-center justify-center gap-1.5 text-[10px] font-bold py-2 rounded-xl transition-all cursor-pointer ${
                 rightPanelTab === 'tasks' 
-                  ? 'bg-white text-slate-800 shadow-xs border border-slate-200/30' 
+                  ? 'bg-white text-slate-800 shadow-xs border border-slate-200/30 font-black' 
                   : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <ListTodo className="w-3.5 h-3.5 text-indigo-500" />
-              <span>Google Tasks Cloud</span>
+              <span>Google Tasks</span>
+            </button>
+            <button
+              onClick={() => setRightPanelTab('study')}
+              className={`flex-1 flex items-center justify-center gap-1.5 text-[10px] font-bold py-2 rounded-xl transition-all cursor-pointer relative ${
+                rightPanelTab === 'study' 
+                  ? 'bg-white text-slate-800 shadow-xs border border-slate-200/30 font-black' 
+                  : 'text-slate-500 hover:text-slate-800'
+              }`}
+            >
+              <BookOpen className="w-3.5 h-3.5 text-[#C4342B]" />
+              <span>Leitner Deck</span>
+              {videos.some(v => (v.watchedStatus === 'Watching' || v.watchedStatus === 'Done') && !v.lastReviewedDate) && (
+                <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-[#C4342B] animate-pulse"></span>
+              )}
             </button>
           </div>
 
@@ -1360,8 +1582,9 @@ Synced via CurateMind AI`;
                 onQuickNote={handleCreateQuickNote}
                 onAiCurate={handleAnalyzeVideo}
                 isAnalyzing={isAnalyzing}
+                onOpenImportModal={() => setIsImportModalOpen(true)}
               />
-            ) : (
+            ) : rightPanelTab === 'tasks' ? (
               <TasksPanel 
                 user={user}
                 onSignIn={handleSignIn}
@@ -1369,6 +1592,12 @@ Synced via CurateMind AI`;
                 linkedAccounts={linkedAccounts}
                 onLinkAccount={handleLinkNewAccount}
                 onUnlinkAccount={handleUnlinkAccount}
+              />
+            ) : (
+              <LeitnerStudyPanel 
+                videos={videos}
+                onUpdateVideo={handleUpdateVideo}
+                showToast={showToast}
               />
             )}
           </div>
@@ -1387,6 +1616,23 @@ Synced via CurateMind AI`;
           isSyncedToTasks={syncedTaskIds.includes(selectedVideo.id)}
           isInKeep={keepNotes.some(note => note.id === `keep-${selectedVideo.id}` || note.videoId === selectedVideo.id)}
           onUpdateVideo={handleUpdateVideo}
+        />
+      )}
+
+      {/* Keep Bulk Takeout Importer Modal */}
+      {isImportModalOpen && (
+        <KeepImportModal 
+          isOpen={isImportModalOpen}
+          onClose={() => setIsImportModalOpen(false)}
+          existingVideos={videos}
+          onImportComplete={(newVideos) => {
+            const updated = [...newVideos, ...videos];
+            setVideos(updated);
+            localStorage.setItem('tubekeep_videos', maybeEncode(updated, appSettings.encryptLocalStorage));
+            showToast(`Successfully imported ${newVideos.length} educational curations into your Bookshelf!`, 'success');
+          }}
+          appSettings={appSettings}
+          showToast={showToast}
         />
       )}
 

@@ -39,10 +39,68 @@ function extractVideoId(url: string): string | null {
   return (match && match[2].length === 11) ? match[2] : null;
 }
 
+// Fetch YouTube timedtext captions without API key
+async function fetchYoutubeCaptions(videoId: string): Promise<{ text: string; lines: { start: number; text: string }[] } | null> {
+  try {
+    const response = await fetch(`https://www.youtube.com/watch?v=${videoId}`, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/115.0.0.0 Safari/537.36',
+        'Accept-Language': 'en-US,en;q=0.9',
+      }
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    
+    const regex = /"captionTracks":\s*(\[.*?\])/;
+    const match = html.match(regex);
+    if (!match) return null;
+    
+    const captionTracks = JSON.parse(match[1]);
+    if (!Array.isArray(captionTracks) || captionTracks.length === 0) return null;
+    
+    // Find english or any track
+    const englishTrack = captionTracks.find((t: any) => t.languageCode === 'en' || t.languageCode?.startsWith('en')) || captionTracks[0];
+    if (!englishTrack || !englishTrack.baseUrl) return null;
+    
+    const captionResponse = await fetch(englishTrack.baseUrl);
+    if (!captionResponse.ok) return null;
+    
+    const xml = await captionResponse.text();
+    const textRegex = /<text start="([\d\.]+)" dur="[^"]*"[^>]*>([^<]+)<\/text>/g;
+    let matchText;
+    const lines: { start: number; text: string }[] = [];
+    while ((matchText = textRegex.exec(xml)) !== null) {
+      const start = parseFloat(matchText[1]);
+      const text = matchText[2]
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&amp;#39;/g, "'");
+      lines.push({ start, text });
+    }
+    
+    if (lines.length === 0) return null;
+    
+    const fullText = lines.map(l => {
+      const m = Math.floor(l.start / 60);
+      const s = Math.floor(l.start % 60);
+      const timestamp = `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+      return `[${timestamp}] ${l.text}`;
+    }).join('\n');
+    
+    return { text: fullText, lines };
+  } catch (error) {
+    console.warn("Failed to fetch youtube captions for", videoId, error);
+    return null;
+  }
+}
+
 // API: YouTube Metadata and AI Summary
 app.post("/api/summarize", async (req, res) => {
   try {
-    const { url, openRouterApiKey, customGeminiApiKey, openRouterModel } = req.body;
+    const { url, openRouterApiKey, customGeminiApiKey, openRouterModel, isBulkImport } = req.body;
     if (!url) {
       return res.status(400).json({ error: "Resource URL is required" });
     }
@@ -79,7 +137,23 @@ app.post("/api/summarize", async (req, res) => {
       } catch (e) {}
     }
 
-    const prompt = `Analyze this educational resource link and generate a structured summary, categorization, star rating (1-5), and key takeaways.
+    const prompt = isBulkImport ? 
+    `Rapidly analyze this resource link and generate a fast, lightweight summary.
+Resource URL: "${url}"
+Is YouTube Video: ${isYouTube ? "Yes" : "No"}
+Pre-parsed Host Hint: "${defaultChannelTitle}"
+Pre-parsed Title Hint: "${defaultTitle}"
+
+Please provide a highly compact, lightweight analysis to save tokens:
+1. Determine a clear educational title.
+2. Determine the creator name.
+3. Select a matching category.
+4. Write a brief 1-paragraph summary.
+5. Provide 2-3 concept tags (e.g., 'Web Development', 'UI Design').
+6. Rating (1-5) and a short 1-sentence justification.
+7. Provide exactly 2 bullet takeaways.
+8. Clickbait buster: 1 short sentence on actual purpose and 1 sentence comparison.` :
+    `Analyze this educational resource link and generate a structured summary, categorization, star rating (1-5), and key takeaways.
 Resource URL: "${url}"
 Is YouTube Video: ${isYouTube ? "Yes" : "No"}
 Pre-parsed Host Hint: "${defaultChannelTitle}"
@@ -102,6 +176,7 @@ Please provide a highly complete analysis of this resource:
    - "category": A highly granular, precise, academic-grade/scholarly category or domain area that perfectly fits the content of the resource (e.g., 'Cognitive Neuroscience', 'Distributed Systems', 'Applied Cryptography', 'Behavioral Economics', 'Acoustic Engineering', 'Reinforcement Learning', 'Information Architecture', 'Human-Computer Interaction', 'Epistemology & Education', 'Compiler Design', 'Stochastic Optimization'). Avoid generic, overly-broad classifications. Do not limit yourself to a static list.
    - "conceptualComplexity": The depth of conceptual complexity of the material (e.g., 'Introductory (undergraduate-level)', 'Intermediate (advanced-undergraduate)', 'Advanced (graduate/practitioner)', 'PhD-grade/Cutting-edge research', or 'Specialized Technical').
    - "interdisciplinaryField": The interdisciplinary field or domain crossover of the resource (e.g., 'Bioinformatics', 'Neuro-symbolic AI', 'Quantum Chemistry', 'Computational Linguistics', 'Complex Systems theory', etc.). If none, select a fitting scholastic blend.
+   - "conceptTags": A list of 3-5 precise, atomic concept tags/learning pillars representing core educational themes (e.g., 'Transformer Networks', 'Mixture of Experts', 'Visual Hierarchy', 'Personal Knowledge Management'). Avoid generic categories.
 6. An honest rating based on estimated educational value, execution quality, and instructional clarity.
 7. Descriptive and actionable takeaways.
 8. A clickbait buster assessment. Often titles are highly sensationalized, vague, or misleading. Formulate:
@@ -117,14 +192,14 @@ Please provide a highly complete analysis of this resource:
           "Authorization": `Bearer ${openRouterApiKey}`,
           "Content-Type": "application/json",
           "HTTP-Referer": "https://ai.studio/build",
-          "X-Title": "TubeKeep Curator"
+          "X-Title": "Marginalia"
         },
         body: JSON.stringify({
           model: modelName,
           messages: [
             {
               role: "user",
-              content: prompt + "\n\nIMPORTANT: Return ONLY a valid JSON object matching the requested schema. Ensure the response strictly parses as JSON with properties: 'title' (string), 'channelTitle' (string), 'thumbnail' (string), 'summary' (string), 'category' (string), 'conceptualComplexity' (string), 'interdisciplinaryField' (string), 'rating' (integer), 'ratingJustification' (string), 'takeaways' (array of strings), 'actualPurpose' (string), and 'debunkedClickbait' (string)."
+              content: prompt + "\n\nIMPORTANT: Return ONLY a valid JSON object matching the requested schema. Ensure the response strictly parses as JSON with properties: 'title' (string), 'channelTitle' (string), 'thumbnail' (string), 'summary' (string), 'category' (string), 'conceptualComplexity' (string), 'interdisciplinaryField' (string), 'conceptTags' (array of strings), 'rating' (integer), 'ratingJustification' (string), 'takeaways' (array of strings), 'actualPurpose' (string), and 'debunkedClickbait' (string)."
             }
           ],
           response_format: { type: "json_object" }
@@ -181,7 +256,7 @@ Please provide a highly complete analysis of this resource:
       model: "gemini-3.5-flash",
       contents: prompt,
       config: {
-        maxOutputTokens: 1200, // Enforce token utilization moderation for optimized results
+        maxOutputTokens: isBulkImport ? 400 : 1200, // Enforce token utilization moderation for optimized results
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
@@ -200,19 +275,24 @@ Please provide a highly complete analysis of this resource:
             },
             summary: {
               type: Type.STRING,
-              description: "An exceptionally detailed, comprehensive multi-paragraph summary (at least 3 dense, thorough paragraphs of 4-6 sentences each) covering the core topics, specific details, arguments, technical terms, real-world examples, and key teaching points."
+              description: isBulkImport ? "A brief, 1-paragraph summary." : "An exceptionally detailed, comprehensive multi-paragraph summary (at least 3 dense, thorough paragraphs of 4-6 sentences each) covering the core topics, specific details, arguments, technical terms, real-world examples, and key teaching points."
             },
             category: {
               type: Type.STRING,
-              description: "A highly granular, precise, academic-grade/scholarly category or domain area that perfectly fits the content of the resource (e.g., 'Cognitive Neuroscience', 'Distributed Systems', 'Applied Cryptography', 'Behavioral Economics', 'Acoustic Engineering', 'Reinforcement Learning', 'Information Architecture', 'Human-Computer Interaction', 'Epistemology & Education', 'Compiler Design', 'Stochastic Optimization'). Avoid generic, overly-broad classifications."
+              description: "A highly granular, precise, academic-grade/scholarly category or domain area that perfectly fits the content of the resource."
             },
             conceptualComplexity: {
               type: Type.STRING,
-              description: "The depth of conceptual complexity of the material (e.g., 'Introductory (undergraduate-level)', 'Intermediate (advanced-undergraduate)', 'Advanced (graduate/practitioner)', 'PhD-grade/Cutting-edge research', or 'Specialized Technical')."
+              description: "The depth of conceptual complexity of the material."
             },
             interdisciplinaryField: {
               type: Type.STRING,
-              description: "The interdisciplinary field or domain crossover of the resource (e.g., 'Bioinformatics', 'Neuro-symbolic AI', 'Quantum Chemistry', 'Computational Linguistics', 'Complex Systems theory', etc.). If none, select a fitting scholastic blend."
+              description: "The interdisciplinary field or domain crossover of the resource."
+            },
+            conceptTags: {
+              type: Type.ARRAY,
+              items: { type: Type.STRING },
+              description: "A list of 3-5 precise, atomic concept tags/learning pillars representing core educational themes (e.g., 'Transformer Networks', 'Mixture of Experts', 'Visual Hierarchy', 'Personal Knowledge Management')."
             },
             rating: {
               type: Type.INTEGER,
@@ -225,7 +305,7 @@ Please provide a highly complete analysis of this resource:
             takeaways: {
               type: Type.ARRAY,
               items: { type: Type.STRING },
-              description: "A list of 5-7 highly detailed, comprehensive, descriptive, and actionable takeaways, lessons, or concepts (each should be a full, detailed sentence or two)."
+              description: isBulkImport ? "A list of exactly 2 key takeaways." : "A list of 5-7 highly detailed, comprehensive, descriptive, and actionable takeaways, lessons, or concepts (each should be a full, detailed sentence or two)."
             },
             actualPurpose: {
               type: Type.STRING,
@@ -236,7 +316,7 @@ Please provide a highly complete analysis of this resource:
               description: "A 1-2 sentence objective comparison of the sensationalized title/thumbnail hype vs. what the resource realistically covers."
             }
           },
-          required: ["title", "channelTitle", "thumbnail", "summary", "category", "conceptualComplexity", "interdisciplinaryField", "rating", "ratingJustification", "takeaways", "actualPurpose", "debunkedClickbait"]
+          required: ["title", "channelTitle", "thumbnail", "summary", "category", "conceptualComplexity", "interdisciplinaryField", "conceptTags", "rating", "ratingJustification", "takeaways", "actualPurpose", "debunkedClickbait"]
         }
       }
     });
@@ -273,6 +353,10 @@ app.post("/api/transcript", async (req, res) => {
       return res.status(400).json({ error: "Resource URL and Title are required to analyze transcripts" });
     }
 
+    const videoId = extractVideoId(url);
+    const captions = videoId ? await fetchYoutubeCaptions(videoId) : null;
+    const captionsFound = !!captions;
+
     const ai = getGeminiClient();
 
     const prompt = `You are an expert academic-grade educational video archivist and transcription analyst. Create a detailed, highly technical timestamped educational transcript with key segment highlights for the following resource:
@@ -280,7 +364,17 @@ Title: "${title}"
 URL: "${url}"
 Summary Context: "${summary || ''}"
 
-Please reconstruct a highly complete, comprehensive, and instructional transcript of the video's core contents divided into 6-8 chronologically progressive timestamped segment blocks. Each segment must contain detailed speaker dialogue (by the host, presenter, or domain researchers), concrete technical details (like formulas, variables, code patterns, or design rules), and a highlight assessment.
+${captionsFound ? `GROUNDED REAL TRANSCRIPT INFO:
+We have successfully extracted the following real-time captions from this video (capped for context efficiency):
+------------------
+${captions!.text.slice(0, 15000)}
+------------------
+
+CRITICAL TRANSCRIPTION REQUIREMENT:
+You MUST use these actual spoken words, dialogue fragments, and timing patterns from the provided captions to build the 6-8 chronologically progressive timestamped segment blocks. Do NOT invent or hallucinate dialogue when real captions are provided. Align your segment blocks' "timestamp" and "text" exactly with the provided captions above!` : `NO CAPTIONS AVAILABLE:
+No captions were found for this resource. You MUST reconstruct a highly complete, comprehensive, and instructional dialogue transcript of the video's core contents divided into 6-8 chronologically progressive timestamped segment blocks based on the title and summary context.`}
+
+Please divide the core contents into 6-8 chronologically progressive timestamped segment blocks. Each segment must contain detailed speaker dialogue (by the host, presenter, or domain researchers), concrete technical details (like formulas, variables, code patterns, or design rules), and a highlight assessment.
 
 Return the response strictly as a JSON object with:
 1. "highlightsSummary": A 2-sentence summary explaining the absolute core conceptual breakthroughs of the highlighted segments.
@@ -332,7 +426,10 @@ Return the response strictly as a JSON object with:
     }
 
     const result = JSON.parse(aiText);
-    return res.json(result);
+    return res.json({
+      ...result,
+      isVerified: captionsFound
+    });
 
   } catch (error: any) {
     console.error("Error generating AI transcript:", error);

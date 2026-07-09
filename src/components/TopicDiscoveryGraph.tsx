@@ -6,34 +6,23 @@ import {
   ZoomIn, 
   ZoomOut, 
   Info,
-  HelpCircle
+  HelpCircle,
+  Award,
+  ArrowRight
 } from 'lucide-react';
-
-interface VideoItem {
-  id: string;
-  title: string;
-  channelTitle: string;
-  thumbnail: string;
-  url: string;
-  summary: string;
-  category: string;
-  rating: number;
-  ratingJustification: string;
-  takeaways: string[];
-  watchedStatus?: 'To Watch' | 'Watching' | 'Done';
-}
+import { VideoItem } from '../types';
 
 interface TopicDiscoveryGraphProps {
   videos: VideoItem[];
   onSelectVideo: (video: VideoItem) => void;
-  onSelectCategory: (category: string) => void;
-  activeCategory: string;
+  onSelectConcept: (concept: string | null) => void;
+  activeConcept: string | null;
 }
 
 interface GraphNode extends d3.SimulationNodeDatum {
   id: string;
   label: string;
-  type: 'category' | 'video' | 'keyword';
+  type: 'concept' | 'video';
   group: number;
   size: number;
   color: string;
@@ -45,13 +34,14 @@ interface GraphLink extends d3.SimulationLinkDatum<GraphNode> {
   source: string | GraphNode;
   target: string | GraphNode;
   value: number;
+  type: 'concept-link' | 'curriculum-path';
 }
 
 export default function TopicDiscoveryGraph({
   videos,
   onSelectVideo,
-  onSelectCategory,
-  activeCategory
+  onSelectConcept,
+  activeConcept
 }: TopicDiscoveryGraphProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgRef = useRef<SVGSVGElement>(null);
@@ -59,55 +49,7 @@ export default function TopicDiscoveryGraph({
   const [isExpanded, setIsExpanded] = useState(true);
   const [hoveredNode, setHoveredNode] = useState<GraphNode | null>(null);
   const [graphSearch, setGraphSearch] = useState('');
-  const [repulsionStrength, setRepulsionStrength] = useState(-150);
-  const [linkDistance, setLinkDistance] = useState(80);
-  const [selectedNodeType, setSelectedNodeType] = useState<'all' | 'category' | 'video' | 'keyword'>('all');
   const [showTutorial, setShowTutorial] = useState(true);
-
-  // Helper to extract clean keywords from video takeaways and titles
-  const getKeywordsForVideo = (video: VideoItem): string[] => {
-    const words = new Set<string>();
-    const textToScan = `${video.title} ${video.category} ${video.takeaways.join(' ')}`.toLowerCase();
-    
-    const domains = [
-      { key: 'ai', display: 'Artificial Intelligence' },
-      { key: 'gemini', display: 'Gemini Systems' },
-      { key: 'neural', display: 'Neural Networks' },
-      { key: 'devin', display: 'Devin Automation' },
-      { key: 'cognitive', display: 'Cognitive Science' },
-      { key: 'framework', display: 'System Frameworks' },
-      { key: 'design', display: 'Creative Design' },
-      { key: 'typography', display: 'Typography & Layout' },
-      { key: 'retention', display: 'Active Retention' },
-      { key: 'memory', display: 'Memory Models' },
-      { key: 'learning', display: 'Metacognitive Learning' },
-      { key: 'architecture', display: 'Software Architecture' },
-      { key: 'intelligence', display: 'Business Intelligence' },
-      { key: 'strategy', display: 'Growth Strategy' },
-      { key: 'leader', display: 'Leadership Systems' },
-      { key: 'productivity', display: 'Productivity Engines' }
-    ];
-
-    domains.forEach(d => {
-      if (textToScan.includes(d.key)) {
-        words.add(d.display);
-      }
-    });
-
-    // Extract prominent capitalized words from takeaways
-    video.takeaways.forEach((takeaway: string) => {
-      const matches = takeaway.match(/[A-Z][a-zA-Z]{3,}/g);
-      if (matches) {
-        matches.forEach(m => {
-          if (!['This', 'That', 'With', 'From', 'Your', 'They', 'Then', 'What', 'How', 'When', 'Study', 'Code', 'Devin', 'Abdaal', 'Sung'].includes(m)) {
-            words.add(m);
-          }
-        });
-      }
-    });
-
-    return Array.from(words).slice(0, 4); // Limit to top 4 per video for layout neatness
-  };
 
   // ResizeObserver for modern fluid layout sizing
   useEffect(() => {
@@ -131,28 +73,42 @@ export default function TopicDiscoveryGraph({
     const links: GraphLink[] = [];
     const nodeSet = new Set<string>();
 
-    // Unique Categories list
-    const categories = Array.from(new Set(videos.map(v => v.category)));
+    // 1. Gather all unique concept tags from videos
+    const allConceptsMap: Record<string, string[]> = {}; // conceptName -> list of videoIds
+    videos.forEach(v => {
+      const tags = v.conceptTags || [];
+      // Fallback tags if none are extracted yet
+      const tagsToUse = tags.length > 0 ? tags : [v.category, 'General Study'];
+      
+      tagsToUse.forEach(tag => {
+        const cleanTag = tag.trim();
+        if (!allConceptsMap[cleanTag]) {
+          allConceptsMap[cleanTag] = [];
+        }
+        allConceptsMap[cleanTag].push(v.id);
+      });
+    });
 
-    // 1. Add Category Nodes
-    categories.forEach(cat => {
-      const id = `category:${cat}`;
+    // 2. Add Concept Nodes
+    Object.keys(allConceptsMap).forEach(concept => {
+      const id = `concept:${concept}`;
       if (!nodeSet.has(id)) {
+        const isCurrent = activeConcept === concept;
         nodes.push({
           id,
-          label: cat,
-          type: 'category',
+          label: concept,
+          type: 'concept',
           group: 1,
-          size: 24,
-          color: cat === activeCategory ? '#F59E0B' : '#1E293B', // Highlight active category
-          details: `Workspace core domain for organizing related curations. Click to filter curation list.`,
-          associatedData: cat
+          size: isCurrent ? 24 : 18,
+          color: isCurrent ? '#C4342B' : '#15171B', // Red highlight if selected, dark Ink otherwise
+          details: `Atomic research topic. Connected to ${allConceptsMap[concept].length} curated video(s). Click to isolate this concept.`,
+          associatedData: concept
         });
         nodeSet.add(id);
       }
     });
 
-    // 2. Add Video Nodes and link them to Categories
+    // 3. Add Video Nodes & Connect to Concepts
     videos.forEach(video => {
       const videoId = `video:${video.id}`;
       if (!nodeSet.has(videoId)) {
@@ -161,49 +117,57 @@ export default function TopicDiscoveryGraph({
           label: video.title,
           type: 'video',
           group: 2,
-          size: 16,
-          color: '#3F51B5',
-          details: `Curated Video by ${video.channelTitle}. Rating: ⭐ ${video.rating}/5. Double-click to open Study workspace.`,
+          size: 13,
+          color: '#8A9A86', // Sage/Paper accent tone
+          details: `Curated Video by ${video.channelTitle}. Complexity: ${video.conceptualComplexity || 'Standard'}. Double-click to study side-by-side.`,
           associatedData: video
         });
         nodeSet.add(videoId);
-
-        // Link video to its category
-        links.push({
-          source: `category:${video.category}`,
-          target: videoId,
-          value: 2
-        });
       }
 
-      // 3. Extract Keywords, create Keyword nodes, and link to Video
-      const keywords = getKeywordsForVideo(video);
-      keywords.forEach(kw => {
-        const keywordId = `keyword:${kw}`;
-        if (!nodeSet.has(keywordId)) {
-          nodes.push({
-            id: keywordId,
-            label: kw,
-            type: 'keyword',
-            group: 3,
-            size: 10,
-            color: '#10B981',
-            details: `Cross-curation learning pillar concept.`
-          });
-          nodeSet.add(keywordId);
-        }
-
-        // Link video to keyword
+      // Link video to its concepts
+      const tags = video.conceptTags || [];
+      const tagsToUse = tags.length > 0 ? tags : [video.category, 'General Study'];
+      tagsToUse.forEach(tag => {
         links.push({
-          source: videoId,
-          target: keywordId,
-          value: 1
+          source: `concept:${tag.trim()}`,
+          target: videoId,
+          value: 1,
+          type: 'concept-link'
         });
       });
     });
 
+    // 4. Chronological Curriculum sequential links (A -> B -> C)
+    // Group videos by category, sort by createdAt (ascending, oldest first)
+    const categoryGroups: Record<string, VideoItem[]> = {};
+    videos.forEach(v => {
+      if (!categoryGroups[v.category]) {
+        categoryGroups[v.category] = [];
+      }
+      categoryGroups[v.category].push(v);
+    });
+
+    Object.keys(categoryGroups).forEach(cat => {
+      const groupVideos = categoryGroups[cat].sort((a, b) => 
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+
+      // Link consecutive videos together
+      for (let i = 0; i < groupVideos.length - 1; i++) {
+        const sourceId = `video:${groupVideos[i].id}`;
+        const targetId = `video:${groupVideos[i+1].id}`;
+        links.push({
+          source: sourceId,
+          target: targetId,
+          value: 2.5,
+          type: 'curriculum-path'
+        });
+      }
+    });
+
     return { nodes, links };
-  }, [videos, activeCategory]);
+  }, [videos, activeConcept]);
 
   const zoomRef = useRef<any>(null);
 
@@ -245,12 +209,26 @@ export default function TopicDiscoveryGraph({
     const svg = d3.select(svgRef.current);
     svg.selectAll('*').remove();
 
+    // Define arrows for the curriculum path
+    const defs = svg.append('defs');
+    defs.append('marker')
+      .attr('id', 'arrow')
+      .attr('viewBox', '0 0 10 10')
+      .attr('refX', 18) // Distance from target node center (caps close to circle boundary)
+      .attr('refY', 5)
+      .attr('markerWidth', 6)
+      .attr('markerHeight', 6)
+      .attr('orient', 'auto-start-reverse')
+      .append('path')
+      .attr('d', 'M 0 1.5 L 10 5 L 0 8.5 z')
+      .attr('fill', '#C4342B'); // Signal Red arrow
+
     // Create container group for zoom/pan
     const container = svg.append('g').attr('class', 'graph-container');
 
     // Add zoom capability
     const zoom = d3.zoom<SVGSVGElement, unknown>()
-      .scaleExtent([0.2, 4])
+      .scaleExtent([0.15, 4])
       .on('zoom', (event) => {
         container.attr('transform', event.transform);
       });
@@ -270,11 +248,11 @@ export default function TopicDiscoveryGraph({
     const simulation = d3.forceSimulation<GraphNode>(nodes)
       .force('link', d3.forceLink<GraphNode, GraphLink>(links)
         .id(d => d.id)
-        .distance(linkDistance)
+        .distance(d => d.type === 'curriculum-path' ? 150 : 100)
       )
-      .force('charge', d3.forceManyBody().strength(repulsionStrength))
+      .force('charge', d3.forceManyBody().strength(-280))
       .force('center', d3.forceCenter(width / 2, height / 2))
-      .force('collision', d3.forceCollide<GraphNode>().radius(d => d.size + 15));
+      .force('collision', d3.forceCollide<GraphNode>().radius(d => d.size + 32));
 
     // Render connections (links)
     const link = container.append('g')
@@ -282,10 +260,11 @@ export default function TopicDiscoveryGraph({
       .selectAll('line')
       .data(links)
       .enter().append('line')
-      .attr('stroke', '#E2E8F0')
-      .attr('stroke-opacity', 0.6)
-      .attr('stroke-width', d => d.value === 2 ? 2.5 : 1.2)
-      .attr('stroke-dasharray', d => d.value === 1 ? '3,3' : 'none');
+      .attr('stroke', d => d.type === 'curriculum-path' ? '#C4342B' : '#CBD5E1') // Signal Red for curriculum path, light gray slate for concepts
+      .attr('stroke-opacity', d => d.type === 'curriculum-path' ? 0.95 : 0.45)
+      .attr('stroke-width', d => d.type === 'curriculum-path' ? 2.5 : 1.2)
+      .attr('stroke-dasharray', d => d.type === 'concept-link' ? '4,4' : 'none')
+      .attr('marker-end', d => d.type === 'curriculum-path' ? 'url(#arrow)' : null); // Arrowheads for study sequences!
 
     // Drag helper methods
     function dragstarted(event: any, d: any) {
@@ -305,21 +284,8 @@ export default function TopicDiscoveryGraph({
       d.fy = null;
     }
 
-    // Render nodes
-    const node = container.append('g')
-      .attr('class', 'nodes')
-      .selectAll<SVGGElement, GraphNode>('g')
-      .data(nodes)
-      .enter().append('g')
-      .call(d3.drag<SVGGElement, GraphNode>()
-        .on('start', dragstarted)
-        .on('drag', dragged)
-        .on('end', dragended)
-      );
-
-    // Filter nodes styling based on search and selected node filters
+    // Filter nodes styling based on search
     const isNodeHighlighted = (d: GraphNode) => {
-      if (selectedNodeType !== 'all' && d.type !== selectedNodeType) return false;
       if (graphSearch.trim()) {
         const query = graphSearch.toLowerCase();
         return d.label.toLowerCase().includes(query) || (d.details && d.details.toLowerCase().includes(query));
@@ -327,129 +293,180 @@ export default function TopicDiscoveryGraph({
       return true;
     };
 
-    // Node representation: Circle/Glow
-    node.append('circle')
-      .attr('r', d => d.size)
-      .attr('fill', d => {
-        if (d.type === 'category') {
-          return d.id === `category:${activeCategory}` ? '#F59E0B' : '#0F172A';
-        }
-        return d.color;
-      })
-      .attr('stroke', '#ffffff')
-      .attr('stroke-width', d => d.type === 'category' ? 3 : 1.5)
-      .attr('shadow-md', 'true')
+    // Render nodes
+    const node = container.append('g')
+      .attr('class', 'nodes')
+      .selectAll<SVGGElement, GraphNode>('g')
+      .data(nodes)
+      .enter().append('g')
+      .style('cursor', 'pointer')
       .style('opacity', d => isNodeHighlighted(d) ? 1 : 0.15)
-      .style('cursor', 'grab')
+      .call(d3.drag<SVGGElement, GraphNode>()
+        .on('start', dragstarted)
+        .on('drag', dragged)
+        .on('end', dragended)
+      );
+
+    // 1. Render Concept Nodes (Solid Ink/Black circles, Red when active)
+    node.filter(d => d.type === 'concept')
+      .append('circle')
+      .attr('class', 'node-shape')
+      .attr('r', d => d.size)
+      .attr('fill', d => d.id === `concept:${activeConcept}` ? '#C4342B' : '#15171B')
+      .attr('stroke', '#FFFFFF')
+      .attr('stroke-width', 2.5)
+      .style('filter', d => d.id === `concept:${activeConcept}` ? 'drop-shadow(0 0 6px rgba(196,52,43,0.6))' : 'none');
+
+    // 2. Render Video/Curation Nodes (Hollow soft-sage circles with central player dot)
+    const videoGroup = node.filter(d => d.type === 'video');
+    
+    videoGroup.append('circle')
+      .attr('class', 'node-shape')
+      .attr('r', d => d.size)
+      .attr('fill', '#F4F6F4')
+      .attr('stroke', '#8A9A86')
+      .attr('stroke-width', 2.5);
+
+    videoGroup.append('circle')
+      .attr('class', 'node-subshape')
+      .attr('r', 3)
+      .attr('fill', '#8A9A86')
+      .style('pointer-events', 'none');
+
+    // Attach high-fidelity mouse interaction handlers to the whole <g> node group
+    node
       .on('mouseover', (event, d) => {
         setHoveredNode(d);
-        d3.select(event.currentTarget)
+        
+        const g = d3.select(event.currentTarget);
+        g.select('.node-shape')
           .transition()
-          .duration(150)
+          .duration(120)
           .attr('r', d.size + 4)
-          .attr('stroke-width', d.type === 'category' ? 4 : 2.5)
-          .attr('fill', d.type === 'video' ? '#4F46E5' : d.color);
+          .style('filter', 'drop-shadow(0 4px 8px rgba(21,23,27,0.15))');
+          
+        if (d.type === 'video') {
+          g.select('.node-shape')
+            .attr('stroke', '#15171B')
+            .attr('fill', '#FFFFFF');
+          g.select('.node-subshape')
+            .attr('fill', '#15171B')
+            .attr('r', 4.5);
+        } else {
+          g.select('.node-shape')
+            .attr('fill', d.id === `concept:${activeConcept}` ? '#C4342B' : '#334155');
+        }
       })
       .on('mouseout', (event, d) => {
         setHoveredNode(null);
-        d3.select(event.currentTarget)
+        
+        const g = d3.select(event.currentTarget);
+        g.select('.node-shape')
           .transition()
-          .duration(150)
+          .duration(120)
           .attr('r', d.size)
-          .attr('stroke-width', d.type === 'category' ? 3 : 1.5)
-          .attr('fill', d.type === 'category' && d.id === `category:${activeCategory}` ? '#F59E0B' : d.color);
+          .style('filter', d.id === `concept:${activeConcept}` ? 'drop-shadow(0 0 6px rgba(196,52,43,0.5))' : 'none');
+          
+        if (d.type === 'video') {
+          g.select('.node-shape')
+            .attr('stroke', '#8A9A86')
+            .attr('fill', '#F4F6F4');
+          g.select('.node-subshape')
+            .attr('fill', '#8A9A86')
+            .attr('r', 3);
+        } else {
+          g.select('.node-shape')
+            .attr('fill', d.id === `concept:${activeConcept}` ? '#C4342B' : '#15171B');
+        }
       })
       .on('click', (event, d) => {
-        if (d.type === 'category') {
-          onSelectCategory(d.associatedData);
+        if (d.type === 'concept') {
+          onSelectConcept(d.associatedData === activeConcept ? null : d.associatedData);
         } else if (d.type === 'video') {
           onSelectVideo(d.associatedData);
         }
       });
 
-    // Add category specific visual icons inside nodes or a clean text label
+    // Add clean labels: concept above node, video below node to prevent crowding collisions completely
     node.append('text')
-      .attr('dy', d => d.size + 14)
+      .attr('dy', d => d.type === 'concept' ? -d.size - 8 : d.size + 14)
       .attr('text-anchor', 'middle')
-      .attr('font-size', d => d.type === 'category' ? '10px' : '9px')
-      .attr('font-weight', d => d.type === 'category' ? '900' : '600')
+      .attr('font-size', d => d.type === 'concept' ? '10px' : '9px')
+      .attr('font-weight', d => d.type === 'concept' ? '800' : '600')
       .attr('font-family', '"Inter", sans-serif')
-      .attr('fill', d => d.type === 'category' ? '#0F172A' : '#475569')
-      .style('opacity', d => isNodeHighlighted(d) ? 1 : 0.1)
+      .attr('fill', d => d.type === 'concept' ? '#15171B' : '#64748B')
       .style('pointer-events', 'none')
       .text(d => {
         if (d.type === 'video') {
-          return d.label.length > 18 ? d.label.substring(0, 15) + '...' : d.label;
+          return d.label.length > 15 ? d.label.substring(0, 13) + '...' : d.label;
         }
         return d.label;
       });
 
-    // Simulation update handler
+    // Simulation tick handler
     simulation.on('tick', () => {
       link
-        .attr('x1', d => (d.source as GraphNode).x!)
-        .attr('y1', d => (d.source as GraphNode).y!)
-        .attr('x2', d => (d.target as GraphNode).x!)
-        .attr('y2', d => (d.target as GraphNode).y!);
+         .attr('x1', d => (d.source as GraphNode).x!)
+         .attr('y1', d => (d.source as GraphNode).y!)
+         .attr('x2', d => (d.target as GraphNode).x!)
+         .attr('y2', d => (d.target as GraphNode).y!);
 
       node
-        .attr('transform', d => `translate(${d.x}, ${d.y})`);
+         .attr('transform', d => `translate(${d.x}, ${d.y})`);
     });
 
     return () => {
       simulation.stop();
     };
-  }, [graphData, dimensions, repulsionStrength, linkDistance, graphSearch, selectedNodeType, activeCategory]);
+  }, [graphData, dimensions, graphSearch, activeConcept]);
 
   return (
-    <div className="bg-white border border-slate-200 rounded-3xl overflow-hidden shadow-xs transition-all duration-300">
+    <div className="bg-white border-2 border-brand-ink rounded-3xl overflow-hidden shadow-xs transition-all duration-300">
       
       {/* Visual Station Header */}
-      <div className="p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-gradient-to-r from-slate-50 to-white">
+      <div className="p-5 border-b-2 border-brand-ink flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 bg-gradient-to-tr from-amber-500 to-rose-400 rounded-2xl flex items-center justify-center text-white font-bold text-xl shadow-md shadow-amber-500/10 shrink-0">
-            <Network className="w-5 h-5 text-white" />
+          <div className="w-10 h-10 bg-brand-ink text-brand-paper rounded-2xl flex items-center justify-center font-bold text-xl shrink-0">
+            <Network className="w-5 h-5 text-brand-paper" />
           </div>
           <div>
-            <h2 className="text-sm font-black text-slate-800 uppercase tracking-wider font-display flex items-center gap-2">
-              <span>Topic Discovery Station</span>
-              <span className="bg-emerald-500 text-white text-[9px] px-2 py-0.5 rounded-full font-black">
-                Interactive D3 Network
+            <h2 className="text-sm font-black text-brand-ink uppercase tracking-wider font-display flex items-center gap-2">
+              <span>Concept-Bridging Knowledge Graph</span>
+              <span className="bg-brand-red text-white text-[9px] px-2 py-0.5 rounded-full font-black uppercase tracking-wider">
+                Navigable Curriculum
               </span>
             </h2>
-            <p className="text-[11px] text-slate-500 font-medium">Explore thematic connection meshes between core categories and video concept pillars.</p>
+            <p className="text-[10px] text-slate-500 font-semibold">Explore atomic concept clusters linked by Signal Red sequential curriculum pathways.</p>
           </div>
         </div>
 
-        <div className="flex items-center gap-2.5 self-end sm:self-auto">
-          {/* Active Tutorial Badge */}
+        <div className="flex items-center gap-2 self-end sm:self-auto">
           <button
             onClick={() => setShowTutorial(!showTutorial)}
             className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-700 rounded-lg transition-colors cursor-pointer"
-            title="Toggle interaction guide"
+            title="Toggle interaction matrix guide"
           >
             <HelpCircle className="w-4.5 h-4.5" />
           </button>
 
           <button
             onClick={() => setIsExpanded(!isExpanded)}
-            className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer"
+            className="px-3 py-1.5 bg-brand-ink hover:bg-slate-800 text-brand-paper text-[9px] font-black uppercase tracking-wider rounded-xl transition-all cursor-pointer"
           >
-            {isExpanded ? 'Collapse Engine' : 'Expand Network'}
+            {isExpanded ? 'Collapse Graph' : 'Open Graph'}
           </button>
         </div>
       </div>
 
       {showTutorial && isExpanded && (
-        <div className="mx-5 mt-4 p-4 bg-amber-50/50 border border-amber-200/40 rounded-2xl flex items-start gap-3 animate-slide-in">
-          <Info className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
-          <div className="space-y-1">
-            <h4 className="text-[11px] font-black uppercase tracking-wider text-amber-800 font-display">Interaction Matrix Guide</h4>
-            <p className="text-[11px] text-slate-600 leading-relaxed font-semibold">
-              • <strong className="text-amber-800">Drag nodes</strong> to dynamically redirect the physical forces. <br />
-              • <strong className="text-amber-800">Scroll wheel</strong> or pinch-to-zoom to zoom in/out of the topological space. <br />
-              • <strong className="text-amber-800">Click categories</strong> to filter the bookshelf. <br />
-              • <strong className="text-amber-800">Click videos</strong> to trigger side-by-side workspace focus immediately.
+        <div className="mx-5 mt-4 p-4 bg-brand-paper/50 border border-brand-ink/10 rounded-2xl flex items-start gap-3 animate-slide-in select-text">
+          <Info className="w-4 h-4 text-brand-red shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs">
+            <h4 className="text-[10px] font-black uppercase tracking-wider text-brand-ink font-display">How to Navigate this Curriculum:</h4>
+            <p className="text-slate-600 leading-relaxed font-semibold">
+              • <strong className="text-brand-ink">Atomic Concepts (Dark Nodes)</strong>: Click to filter your bookshelfed curations to this specific conceptual cluster. <br />
+              • <strong className="text-brand-ink">Study Pathways (Signal Red Arrows)</strong>: Connects consecutive curations chronologically. Follow the arrows for a logically staged curriculum. <br />
+              • <strong className="text-brand-ink">Curation Cards (Sage Nodes)</strong>: Click to select a video; double-click to load its transcript and study notes.
             </p>
           </div>
         </div>
@@ -457,8 +474,23 @@ export default function TopicDiscoveryGraph({
 
       {isExpanded && (
         <div className="relative">
+          {/* Active Concept Filter indicator */}
+          {activeConcept && (
+            <div className="absolute top-4 left-4 bg-brand-red text-white text-[9px] px-3 py-1.5 rounded-xl font-black uppercase tracking-widest flex items-center gap-1.5 shadow-md z-10">
+              <Award className="w-3.5 h-3.5" />
+              <span>Filtering Concept: {activeConcept}</span>
+              <button 
+                onClick={() => onSelectConcept(null)} 
+                className="bg-black/25 hover:bg-black/40 text-white rounded-full p-0.5 ml-1 transition-colors"
+                title="Reset concept filter"
+              >
+                <X className="w-3 h-3 stroke-[3]" />
+              </button>
+            </div>
+          )}
+
           {/* Graph Display Area */}
-          <div ref={containerRef} className="w-full relative bg-slate-50/20 min-h-[380px] lg:min-h-[440px]">
+          <div ref={containerRef} className="w-full relative bg-slate-50/10 min-h-[380px] lg:min-h-[440px]">
             <svg 
               ref={svgRef} 
               width={dimensions.width} 
@@ -467,7 +499,7 @@ export default function TopicDiscoveryGraph({
             />
 
             {/* Navigation and Utility buttons */}
-            <div className="absolute bottom-4 right-4 bg-white/95 border border-slate-200/80 p-1.5 rounded-2xl flex items-center gap-1 shadow-sm backdrop-blur-xs z-10">
+            <div className="absolute bottom-4 right-4 bg-white/95 border border-slate-200 p-1.5 rounded-2xl flex items-center gap-1 shadow-sm backdrop-blur-xs z-10">
               <button
                 onClick={handleZoomIn}
                 className="p-1.5 bg-slate-50 hover:bg-slate-100 text-slate-600 hover:text-slate-900 rounded-lg transition-colors cursor-pointer"
@@ -492,37 +524,37 @@ export default function TopicDiscoveryGraph({
             </div>
 
             {/* Floating Stats Badge */}
-            <div className="absolute top-4 left-4 bg-slate-900/90 text-white border border-slate-700/50 px-3 py-1.5 rounded-xl flex items-center gap-2 text-[10px] font-black uppercase tracking-wider backdrop-blur-xs z-10">
+            <div className="absolute top-4 right-4 bg-brand-ink text-brand-paper border border-slate-700 px-3 py-1.5 rounded-xl flex items-center gap-2 text-[9px] font-black uppercase tracking-wider backdrop-blur-xs z-10">
               <span className="flex h-2 w-2 relative">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand-red opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-brand-red"></span>
               </span>
-              <span>Topology: {graphData.nodes.length} Nodes & {graphData.links.length} Links</span>
+              <span>Grid: {graphData.nodes.length} Nodes</span>
             </div>
 
-            {/* Render details of hovered node as floating overlay */}
-            <div className="absolute bottom-4 left-4 max-w-[280px] sm:max-w-sm bg-white/95 border border-slate-200/80 p-4 rounded-2xl shadow-md backdrop-blur-xs min-h-[90px] flex flex-col justify-between z-10 select-text">
+            {/* Hovered Node info overlay */}
+            <div className="absolute bottom-4 left-4 max-w-[280px] sm:max-w-sm bg-white/95 border-2 border-brand-ink p-4 rounded-2xl shadow-md backdrop-blur-xs min-h-[90px] flex flex-col justify-between z-10 select-text">
               {hoveredNode ? (
                 <div className="space-y-1">
                   <div className="flex items-center gap-1.5">
                     <span className={`w-2 h-2 rounded-full ${
-                      hoveredNode.type === 'category' ? 'bg-amber-400' : hoveredNode.type === 'video' ? 'bg-indigo-500' : 'bg-emerald-500'
+                      hoveredNode.type === 'concept' ? 'bg-brand-red' : 'bg-emerald-500'
                     }`} />
                     <span className="text-[9px] font-black uppercase tracking-wider text-slate-400">
                       {hoveredNode.type}
                     </span>
                   </div>
-                  <h4 className="text-xs font-black text-slate-800 line-clamp-2 leading-snug">
+                  <h4 className="text-xs font-black text-brand-ink line-clamp-2 leading-snug">
                     {hoveredNode.label}
                   </h4>
-                  <p className="text-[10px] text-slate-500 font-medium leading-relaxed mt-1">
+                  <p className="text-[10px] text-slate-500 font-semibold leading-relaxed mt-1">
                     {hoveredNode.details}
                   </p>
                 </div>
               ) : (
                 <div className="flex flex-col items-center justify-center text-center h-full text-slate-400 py-2">
                   <div className="text-base">🧭</div>
-                  <p className="text-[10px] font-semibold mt-1">Hover over nodes to inspect concepts & associations</p>
+                  <p className="text-[9px] font-bold text-slate-500 mt-1">Hover over nodes to inspect sequential concepts</p>
                 </div>
               )}
             </div>
@@ -531,5 +563,18 @@ export default function TopicDiscoveryGraph({
       )}
 
     </div>
+  );
+}
+
+// Clean dummy SVG close helper
+interface XProps {
+  className?: string;
+}
+function X({ className }: XProps) {
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className={className}>
+      <line x1="18" y1="6" x2="6" y2="18"></line>
+      <line x1="6" y1="6" x2="18" y2="18"></line>
+    </svg>
   );
 }

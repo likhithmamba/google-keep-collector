@@ -1,4 +1,5 @@
-import { VideoItem } from '../types';
+import { VideoItem, Bookmark } from '../types';
+import { createGoogleDocStudyPacket } from '../lib/auth';
 import { 
   X, 
   ExternalLink, 
@@ -12,6 +13,7 @@ import {
   Sparkles,
   FileCheck,
   CheckCircle,
+  Check,
   Link2,
   BookOpen,
   Clock,
@@ -33,7 +35,9 @@ import {
   Headphones,
   Palette,
   Search,
-  Highlighter
+  Highlighter,
+  Bookmark as BookmarkIcon,
+  Edit3
 } from 'lucide-react';
 import React, { useState, useEffect, useRef } from 'react';
 
@@ -78,12 +82,24 @@ export default function VideoDetailModal({
   const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
   const [isNotepadExpanded, setIsNotepadExpanded] = useState(false);
   const [selectedKeepColor, setSelectedKeepColor] = useState('#FFF4C3');
+  const [isExportingDoc, setIsExportingDoc] = useState(false);
+  const [exportDocError, setExportDocError] = useState<string | null>(null);
+  const [exportDocSuccessUrl, setExportDocSuccessUrl] = useState<string | null>(null);
   const [showColorPicker, setShowColorPicker] = useState(false);
   const [activeBuilderTemplate, setActiveBuilderTemplate] = useState<'insight' | 'action' | 'question' | 'goal' | 'reference' | null>(null);
   const [builderTitle, setBuilderTitle] = useState('');
   const [builderField1, setBuilderField1] = useState('');
   const [builderField2, setBuilderField2] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Smart Bookmarks & Seeking State
+  const [activeRightTab, setActiveRightTab] = useState<'notepad' | 'bookmarks'>('notepad');
+  const [youtubeStartSeconds, setYoutubeStartSeconds] = useState<number | null>(null);
+  const [bookmarkTimestamp, setBookmarkTimestamp] = useState('');
+  const [bookmarkNote, setBookmarkNote] = useState('');
+  const [editingBookmarkId, setEditingBookmarkId] = useState<string | null>(null);
+  const [editingTimestamp, setEditingTimestamp] = useState('');
+  const [editingNote, setEditingNote] = useState('');
 
   // Audio Playback Specific State and Refs
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -278,6 +294,110 @@ export default function VideoDetailModal({
     }
   };
 
+  // Bookmark utility functions
+  const timestampToSeconds = (ts: string): number => {
+    const parts = ts.split(':').map(Number);
+    if (parts.length === 1) {
+      return parts[0] || 0;
+    } else if (parts.length === 2) {
+      return (parts[0] || 0) * 60 + (parts[1] || 0);
+    } else if (parts.length === 3) {
+      return (parts[0] || 0) * 3600 + (parts[1] || 0) * 60 + (parts[2] || 0);
+    }
+    return 0;
+  };
+
+  const handleCreateBookmark = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!bookmarkTimestamp.trim() || !bookmarkNote.trim()) return;
+
+    const newBookmark: Bookmark = {
+      id: `bookmark-${Date.now()}`,
+      timestamp: bookmarkTimestamp.trim(),
+      note: bookmarkNote.trim(),
+      createdAt: new Date().toISOString()
+    };
+
+    const currentBookmarks = video.bookmarks || [];
+    const updatedBookmarks = [...currentBookmarks, newBookmark].sort((a, b) => {
+      return timestampToSeconds(a.timestamp) - timestampToSeconds(b.timestamp);
+    });
+
+    onUpdateVideo({
+      ...video,
+      bookmarks: updatedBookmarks
+    });
+
+    setBookmarkTimestamp('');
+    setBookmarkNote('');
+  };
+
+  const handleUpdateBookmark = (id: string) => {
+    if (!editingTimestamp.trim() || !editingNote.trim()) return;
+
+    const currentBookmarks = video.bookmarks || [];
+    const updatedBookmarks = currentBookmarks.map(b => {
+      if (b.id === id) {
+        return {
+          ...b,
+          timestamp: editingTimestamp.trim(),
+          note: editingNote.trim()
+        };
+      }
+      return b;
+    }).sort((a, b) => {
+      return timestampToSeconds(a.timestamp) - timestampToSeconds(b.timestamp);
+    });
+
+    onUpdateVideo({
+      ...video,
+      bookmarks: updatedBookmarks
+    });
+
+    setEditingBookmarkId(null);
+  };
+
+  const handleDeleteBookmark = (id: string) => {
+    const currentBookmarks = video.bookmarks || [];
+    const updatedBookmarks = currentBookmarks.filter(b => b.id !== id);
+
+    onUpdateVideo({
+      ...video,
+      bookmarks: updatedBookmarks
+    });
+  };
+
+  const handleSeek = (timestamp: string) => {
+    const seconds = timestampToSeconds(timestamp);
+    if (isAudio && audioRef.current) {
+      audioRef.current.currentTime = seconds;
+      audioRef.current.play();
+      setIsPlaying(true);
+    } else if (isYouTube) {
+      setYoutubeStartSeconds(seconds);
+    }
+  };
+
+  const handleSendBookmarkToNotepad = (b: Bookmark) => {
+    const insertText = `\n📌 [${b.timestamp}] ${b.note}\n`;
+    const newText = notesText ? `${notesText}${insertText}` : insertText;
+    setNotesText(newText);
+    setSaveStatus('saving');
+    onUpdateVideo({
+      ...video,
+      studyNotes: newText
+    });
+    setTimeout(() => {
+      setSaveStatus('saved');
+    }, 400);
+  };
+
+  const handleCaptureCurrentTime = () => {
+    if (isAudio && audioRef.current) {
+      setBookmarkTimestamp(formatTime(audioRef.current.currentTime));
+    }
+  };
+
   // Handler for text change with auto-save mechanism
   const handleNotesChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newVal = e.target.value;
@@ -294,6 +414,73 @@ export default function VideoDetailModal({
     setTimeout(() => {
       setSaveStatus('saved');
     }, 400);
+  };
+
+  const handleExportGoogleDoc = async () => {
+    setIsExportingDoc(true);
+    setExportDocError(null);
+    setExportDocSuccessUrl(null);
+    try {
+      const studyPacketTitle = `Marginalia Study Packet: ${video.title}`;
+      
+      const textLines: string[] = [];
+      textLines.push(`==================================================`);
+      textLines.push(`   MARGINALIA STUDY PACKET: CURATION, VERIFIED.   `);
+      textLines.push(`==================================================\n`);
+      textLines.push(`TITLE: ${video.title}`);
+      textLines.push(`SOURCE URL: ${video.url}`);
+      textLines.push(`CHANNEL: ${video.channelTitle || 'Keep Importer'}`);
+      textLines.push(`CURATED AT: ${new Date(video.createdAt).toLocaleString()}\n`);
+      
+      if (video.debunkedClickbait) {
+        textLines.push(`CLICKBAIT RATING: ${video.rating}/5`);
+        textLines.push(`DEBUNKED TITLE: "${video.debunkedClickbait}"`);
+        textLines.push(`RATING JUSTIFICATION: ${video.ratingJustification}\n`);
+      }
+
+      textLines.push(`--------------------------------------------------`);
+      textLines.push(`1. AI SYNTHESIS SUMMARY`);
+      textLines.push(`--------------------------------------------------`);
+      textLines.push(`${video.summary}\n`);
+
+      textLines.push(`--------------------------------------------------`);
+      textLines.push(`2. KEY TAKEAWAYS & RESEARCH BREAKTHROUGHS`);
+      textLines.push(`--------------------------------------------------`);
+      video.takeaways.forEach((t) => {
+        textLines.push(`  [✓] ${t}`);
+      });
+      textLines.push(`\n`);
+
+      if (video.bookmarks && video.bookmarks.length > 0) {
+        textLines.push(`--------------------------------------------------`);
+        textLines.push(`3. ACADEMIC SMART BOOKMARKS & TIMELINE`);
+        textLines.push(`--------------------------------------------------`);
+        video.bookmarks.forEach((b) => {
+          textLines.push(`  [${b.timestamp}] ${b.note}`);
+        });
+        textLines.push(`\n`);
+      }
+
+      textLines.push(`--------------------------------------------------`);
+      textLines.push(`4. PERSONAL STUDY NOTES & ANNOTATIONS`);
+      textLines.push(`--------------------------------------------------`);
+      textLines.push(notesText || `No custom study notes drafted yet for this session.\n`);
+
+      textLines.push(`==================================================`);
+      textLines.push(`Generated by Marginalia Curation Workspace.`);
+      textLines.push(`==================================================`);
+
+      const fullContent = textLines.join('\n');
+      const result = await createGoogleDocStudyPacket(studyPacketTitle, fullContent);
+      if (result && result.alternateLink) {
+        setExportDocSuccessUrl(result.alternateLink);
+      }
+    } catch (err: any) {
+      console.error(err);
+      setExportDocError(err.message || 'Authentication or network scope failure. Make sure you are signed in.');
+    } finally {
+      setIsExportingDoc(false);
+    }
   };
 
   const handleStatusChange = (status: 'To Watch' | 'Watching' | 'Done') => {
@@ -508,7 +695,8 @@ Report generated via CurateMind AI Workspace on ${new Date().toLocaleString()}
         <div className={`relative aspect-video w-full bg-slate-950 shrink-0 border-b border-slate-100 flex items-center justify-center transition-all duration-300 ${isNotepadExpanded ? 'h-0 opacity-0 overflow-hidden' : 'max-h-[320px]'}`}>
           {isYouTube ? (
             <iframe
-              src={`https://www.youtube.com/embed/${video.videoId}?autoplay=0&rel=0`}
+              key={youtubeStartSeconds}
+              src={`https://www.youtube.com/embed/${video.videoId}?autoplay=${youtubeStartSeconds !== null ? 1 : 0}&start=${youtubeStartSeconds || 0}&rel=0`}
               title={video.title}
               frameBorder="0"
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -1030,9 +1218,17 @@ Report generated via CurateMind AI Workspace on ${new Date().toLocaleString()}
                     <p className="text-[10px] text-slate-400">Audio transcript and key learning segments</p>
                   </div>
                 </div>
-                <span className="text-[9px] font-black uppercase bg-indigo-100 text-indigo-800 px-2 py-0.5 rounded-md border border-indigo-200/30">
-                  Gemini Flash
-                </span>
+                {(video.transcript as any)?.isVerified ? (
+                  <span className="text-[9px] font-black uppercase bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-md border border-emerald-200/30 flex items-center gap-1 shrink-0">
+                    <Check className="w-3 h-3 text-emerald-700 stroke-[3]" />
+                    <span>Verified Transcript</span>
+                  </span>
+                ) : (
+                  <span className="text-[9px] font-black uppercase bg-amber-50 text-amber-800 px-2 py-0.5 rounded-md border border-amber-200/30 flex items-center gap-1 shrink-0">
+                    <Sparkles className="w-3 h-3 text-amber-600 fill-amber-300" />
+                    <span>AI Reconstructed</span>
+                  </span>
+                )}
               </div>
 
               {transcriptError && (
@@ -1225,290 +1421,591 @@ Report generated via CurateMind AI Workspace on ${new Date().toLocaleString()}
           {/* RIGHT PANEL: Study Notes & Extracted Resource Links */}
           <div className={`p-6 overflow-y-auto space-y-5 bg-slate-50/40 flex flex-col h-full transition-all duration-300 ${isNotepadExpanded ? 'col-span-2 md:col-span-2' : ''}`}>
             
-            {/* Notes Section Header */}
-            <div className="flex items-center justify-between shrink-0 flex-wrap gap-3">
-              <div className="flex items-center gap-2">
-                <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg border border-indigo-100">
-                  <Sparkles className="w-4 h-4 fill-indigo-200/30" />
-                </div>
-                <div>
-                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider font-display flex items-center gap-2">
-                    <span>Interactive Study Notepad</span>
-                    {isNotepadExpanded && <span className="bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded text-[9px] uppercase tracking-wider">Expanded Mode</span>}
-                  </h3>
-                  <p className="text-[10px] text-slate-400">Draft notes persist locally and save in real-time</p>
-                </div>
-              </div>
-              
-              {/* Controls and Save Indicators */}
-              <div className="flex items-center gap-2">
-                {/* Save status pill */}
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full transition-all ${
-                  saveStatus === 'saved' 
-                    ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' 
-                    : 'bg-indigo-100 text-indigo-800 border border-indigo-200 animate-pulse'
-                }`}>
-                  {saveStatus === 'saved' ? '✓ Saved' : '⚡ Saving...'}
-                </span>
-
-                {/* Full screen expander */}
-                <button
-                  onClick={() => setIsNotepadExpanded(!isNotepadExpanded)}
-                  className="flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 bg-white border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50/50 hover:text-indigo-700 text-slate-700 rounded-lg transition-all cursor-pointer shadow-2xs"
-                  title={isNotepadExpanded ? "Restore standard split screen view" : "Expand editor space to write freely"}
-                >
-                  {isNotepadExpanded ? (
-                    <>
-                      <Minimize2 className="w-3 h-3 text-indigo-500" />
-                      <span>Split View</span>
-                    </>
-                  ) : (
-                    <>
-                      <Maximize2 className="w-3 h-3 text-indigo-500" />
-                      <span>Free Write Space</span>
-                    </>
-                  )}
-                </button>
-              </div>
+            {/* Dual Tab Navigation */}
+            <div className="flex border-b border-slate-200 shrink-0 gap-4 mb-2">
+              <button
+                type="button"
+                onClick={() => setActiveRightTab('notepad')}
+                className={`pb-2.5 text-[11px] font-black uppercase tracking-wider transition-all border-b-2 flex items-center gap-1.5 cursor-pointer ${
+                  activeRightTab === 'notepad'
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <FileText className="w-3.5 h-3.5" />
+                <span>Study Notepad</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveRightTab('bookmarks')}
+                className={`pb-2.5 text-[11px] font-black uppercase tracking-wider transition-all border-b-2 flex items-center gap-1.5 cursor-pointer ${
+                  activeRightTab === 'bookmarks'
+                    ? 'border-indigo-600 text-indigo-600'
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
+              >
+                <BookmarkIcon className="w-3.5 h-3.5" />
+                <span>Smart Bookmarks</span>
+                {(video.bookmarks?.length || 0) > 0 && (
+                  <span className="bg-indigo-100 text-indigo-800 text-[9px] px-1.5 py-0.2 rounded-md font-black">
+                    {video.bookmarks?.length}
+                  </span>
+                )}
+              </button>
             </div>
 
-            {/* QUICK PRESET INSERTS & INTERACTIVE SNIPPET BUILDER - Boosts note taking speed */}
-            <div className="bg-white border border-slate-200/60 p-3 rounded-2xl space-y-2.5 shadow-2xs">
-              {!activeBuilderTemplate ? (
-                <>
-                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">
-                    ⚡ Formulate Advanced Study Snippets (Click to configure & insert):
-                  </span>
-                  <div className="flex flex-wrap gap-2">
+            {activeRightTab === 'notepad' ? (
+              <div className="flex-1 flex flex-col space-y-5">
+                {/* Notes Section Header */}
+                <div className="flex items-center justify-between shrink-0 flex-wrap gap-3">
+                  <div className="flex items-center gap-2">
+                    <div className="p-1.5 bg-indigo-50 text-indigo-600 rounded-lg border border-indigo-100">
+                      <Sparkles className="w-4 h-4 fill-indigo-200/30" />
+                    </div>
+                    <div>
+                      <h3 className="text-xs font-black text-slate-800 uppercase tracking-wider font-display flex items-center gap-2">
+                        <span>Interactive Study Notepad</span>
+                        {isNotepadExpanded && <span className="bg-indigo-100 text-indigo-800 font-bold px-2 py-0.5 rounded text-[9px] uppercase tracking-wider">Expanded Mode</span>}
+                      </h3>
+                      <p className="text-[10px] text-slate-400">Draft notes persist locally and save in real-time</p>
+                    </div>
+                  </div>
+                  
+                  {/* Controls and Save Indicators */}
+                  <div className="flex items-center gap-2">
+                    {/* Save status pill */}
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full transition-all ${
+                      saveStatus === 'saved' 
+                        ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' 
+                        : 'bg-indigo-100 text-indigo-800 border border-indigo-200 animate-pulse'
+                    }`}>
+                      {saveStatus === 'saved' ? '✓ Saved' : '⚡ Saving...'}
+                    </span>
+
+                    {/* Full screen expander */}
                     <button
                       type="button"
-                      onClick={() => handleOpenBuilder('insight')}
-                      className="text-[10px] font-extrabold px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
-                      title="Insert Insight Template with clear title intent"
+                      onClick={() => setIsNotepadExpanded(!isNotepadExpanded)}
+                      className="flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-1 bg-white border border-slate-200 hover:border-indigo-200 hover:bg-indigo-50/50 hover:text-indigo-700 text-slate-700 rounded-lg transition-all cursor-pointer shadow-2xs"
+                      title={isNotepadExpanded ? "Restore standard split screen view" : "Expand editor space to write freely"}
                     >
-                      <span>💡</span>
-                      <span>Key Insight</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenBuilder('action')}
-                      className="text-[10px] font-extrabold px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
-                      title="Insert Action Item Checklist Template"
-                    >
-                      <span>🛠️</span>
-                      <span>Action Item</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenBuilder('question')}
-                      className="text-[10px] font-extrabold px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
-                      title="Insert Open Question Template"
-                    >
-                      <span>❓</span>
-                      <span>Open Question</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenBuilder('goal')}
-                      className="text-[10px] font-extrabold px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
-                      title="Insert Learning Goal Template"
-                    >
-                      <span>🎯</span>
-                      <span>Learning Goal</span>
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleOpenBuilder('reference')}
-                      className="text-[10px] font-extrabold px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
-                      title="Insert Reference Template"
-                    >
-                      <span>📖</span>
-                      <span>Reference</span>
+                      {isNotepadExpanded ? (
+                        <>
+                          <Minimize2 className="w-3 h-3 text-indigo-500" />
+                          <span>Split View</span>
+                        </>
+                      ) : (
+                        <>
+                          <Maximize2 className="w-3 h-3 text-indigo-500" />
+                          <span>Free Write Space</span>
+                        </>
+                      )}
                     </button>
                   </div>
-                </>
-              ) : (
-                <div className={`p-3.5 rounded-xl border space-y-3 animate-slide-in ${
-                  activeBuilderTemplate === 'insight' ? 'bg-amber-50/40 border-amber-200' :
-                  activeBuilderTemplate === 'action' ? 'bg-emerald-50/40 border-emerald-200' :
-                  activeBuilderTemplate === 'question' ? 'bg-indigo-50/40 border-indigo-200' :
-                  activeBuilderTemplate === 'goal' ? 'bg-rose-50/40 border-rose-200' :
-                  'bg-slate-50 border-slate-300'
-                }`}>
-                  <div className="flex items-center justify-between">
-                    <span className={`text-[10px] font-black uppercase tracking-wider ${
-                      activeBuilderTemplate === 'insight' ? 'text-amber-800' :
-                      activeBuilderTemplate === 'action' ? 'text-emerald-800' :
-                      activeBuilderTemplate === 'question' ? 'text-indigo-800' :
-                      activeBuilderTemplate === 'goal' ? 'text-rose-800' :
-                      'text-slate-700'
+                </div>
+
+                {/* QUICK PRESET INSERTS & INTERACTIVE SNIPPET BUILDER - Boosts note taking speed */}
+                <div className="bg-white border border-slate-200/60 p-3 rounded-2xl space-y-2.5 shadow-2xs">
+                  {!activeBuilderTemplate ? (
+                    <>
+                      <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">
+                        ⚡ Formulate Advanced Study Snippets (Click to configure & insert):
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenBuilder('insight')}
+                          className="text-[10px] font-extrabold px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                          title="Insert Insight Template with clear title intent"
+                        >
+                          <span>💡</span>
+                          <span>Key Insight</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenBuilder('action')}
+                          className="text-[10px] font-extrabold px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                          title="Insert Action Item Checklist Template"
+                        >
+                          <span>🛠️</span>
+                          <span>Action Item</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenBuilder('question')}
+                          className="text-[10px] font-extrabold px-2.5 py-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border border-indigo-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                          title="Insert Open Question Template"
+                        >
+                          <span>❓</span>
+                          <span>Open Question</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenBuilder('goal')}
+                          className="text-[10px] font-extrabold px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                          title="Insert Learning Goal Template"
+                        >
+                          <span>🎯</span>
+                          <span>Learning Goal</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenBuilder('reference')}
+                          className="text-[10px] font-extrabold px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 border border-slate-200/40 rounded-lg cursor-pointer transition-colors shadow-2xs flex items-center gap-1"
+                          title="Insert Reference Template"
+                        >
+                          <span>📖</span>
+                          <span>Reference</span>
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className={`p-3.5 rounded-xl border space-y-3 animate-slide-in ${
+                      activeBuilderTemplate === 'insight' ? 'bg-amber-50/40 border-amber-200' :
+                      activeBuilderTemplate === 'action' ? 'bg-emerald-50/40 border-emerald-200' :
+                      activeBuilderTemplate === 'question' ? 'bg-indigo-50/40 border-indigo-200' :
+                      activeBuilderTemplate === 'goal' ? 'bg-rose-50/40 border-rose-200' :
+                      'bg-slate-50 border-slate-300'
                     }`}>
-                      {activeBuilderTemplate === 'insight' && '💡 Configure Key Insight Title & Details'}
-                      {activeBuilderTemplate === 'action' && '🛠️ Configure Action Item & Priority'}
-                      {activeBuilderTemplate === 'question' && '❓ Configure Open Question Doubt'}
-                      {activeBuilderTemplate === 'goal' && '🎯 Configure Learning Goal Target'}
-                      {activeBuilderTemplate === 'reference' && '📖 Configure Resource Reference'}
+                      <div className="flex items-center justify-between">
+                        <span className={`text-[10px] font-black uppercase tracking-wider ${
+                          activeBuilderTemplate === 'insight' ? 'text-amber-800' :
+                          activeBuilderTemplate === 'action' ? 'text-emerald-800' :
+                          activeBuilderTemplate === 'question' ? 'text-indigo-800' :
+                          activeBuilderTemplate === 'goal' ? 'text-rose-800' :
+                          'text-slate-700'
+                        }`}>
+                          {activeBuilderTemplate === 'insight' && '💡 Configure Key Insight Title & Details'}
+                          {activeBuilderTemplate === 'action' && '🛠️ Configure Action Item & Priority'}
+                          {activeBuilderTemplate === 'question' && '❓ Configure Open Question Doubt'}
+                          {activeBuilderTemplate === 'goal' && '🎯 Configure Learning Goal Target'}
+                          {activeBuilderTemplate === 'reference' && '📖 Configure Resource Reference'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setActiveBuilderTemplate(null)}
+                          className="text-xs font-semibold text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2.5">
+                        <div>
+                          <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider block mb-1">
+                            {activeBuilderTemplate === 'insight' && 'Insight Title'}
+                            {activeBuilderTemplate === 'action' && 'Task / Action Name'}
+                            {activeBuilderTemplate === 'question' && 'What needs clarifying?'}
+                            {activeBuilderTemplate === 'goal' && 'Goal Description'}
+                            {activeBuilderTemplate === 'reference' && 'Topic / Resource Name'}
+                          </label>
+                          <input 
+                            type="text"
+                            value={builderTitle}
+                            onChange={(e) => setBuilderTitle(e.target.value)}
+                            placeholder={
+                              activeBuilderTemplate === 'insight' ? 'e.g. Speed of Gravity Waves' :
+                              activeBuilderTemplate === 'action' ? 'e.g. Refactor API controllers' :
+                              activeBuilderTemplate === 'question' ? 'e.g. Why does token usage increase?' :
+                              activeBuilderTemplate === 'goal' ? 'e.g. Master React transitions' :
+                              'e.g. MDN - Closures documentation'
+                            }
+                            className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider block mb-1">
+                            {activeBuilderTemplate === 'insight' && 'Key Observation'}
+                            {activeBuilderTemplate === 'action' && 'Specific Action Step'}
+                            {activeBuilderTemplate === 'question' && 'Current Doubt Details'}
+                            {activeBuilderTemplate === 'goal' && 'Learning Objective'}
+                            {activeBuilderTemplate === 'reference' && 'Source / URL Link'}
+                          </label>
+                          <input 
+                            type="text"
+                            value={builderField1}
+                            onChange={(e) => setBuilderField1(e.target.value)}
+                            placeholder={
+                              activeBuilderTemplate === 'insight' ? 'e.g. Travels at exactly the speed of light c.' :
+                              activeBuilderTemplate === 'action' ? 'e.g. Strip mock values and enforce strict payload schema.' :
+                              activeBuilderTemplate === 'question' ? 'e.g. Multiple redundant requests during re-renders.' :
+                              activeBuilderTemplate === 'goal' ? 'e.g. Complete responsive transition layouts smoothly.' :
+                              'e.g. https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures'
+                            }
+                            className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider block mb-1">
+                            {activeBuilderTemplate === 'insight' && 'Why It Matters'}
+                            {activeBuilderTemplate === 'action' && 'Priority'}
+                            {activeBuilderTemplate === 'question' && 'Proposed Resolution Path'}
+                            {activeBuilderTemplate === 'goal' && 'Key Milestones'}
+                            {activeBuilderTemplate === 'reference' && 'Key Points / Quick Notes'}
+                          </label>
+                          {activeBuilderTemplate === 'action' ? (
+                            <select
+                              value={builderField2}
+                              onChange={(e) => setBuilderField2(e.target.value)}
+                              className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500 cursor-pointer"
+                            >
+                              <option value="High">🔴 High Priority</option>
+                              <option value="Medium">🟡 Medium Priority</option>
+                              <option value="Low">🟢 Low Priority</option>
+                            </select>
+                          ) : (
+                            <input 
+                              type="text"
+                              value={builderField2}
+                              onChange={(e) => setBuilderField2(e.target.value)}
+                              placeholder={
+                                activeBuilderTemplate === 'insight' ? 'e.g. Matches General Relativity predictions perfectly.' :
+                                activeBuilderTemplate === 'question' ? 'e.g. Implement strict useEffect dependency tracking.' :
+                                activeBuilderTemplate === 'goal' ? 'e.g. Run 3 practice setups with framer-motion.' :
+                                'e.g. Closures preserve state in outer scopes even after exit.'
+                              }
+                              className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500"
+                            />
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-200/30">
+                        <button
+                          type="button"
+                          onClick={() => setActiveBuilderTemplate(null)}
+                          className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition-colors cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleInsertBuilderTemplate}
+                          className={`px-3 py-1.5 font-bold text-[10px] uppercase rounded-lg text-white transition-colors cursor-pointer shadow-xs ${
+                            activeBuilderTemplate === 'insight' ? 'bg-amber-500 hover:bg-amber-600' :
+                            activeBuilderTemplate === 'action' ? 'bg-emerald-600 hover:bg-emerald-700' :
+                            activeBuilderTemplate === 'question' ? 'bg-indigo-600 hover:bg-indigo-700' :
+                            activeBuilderTemplate === 'goal' ? 'bg-rose-500 hover:bg-rose-600' :
+                            'bg-slate-700 hover:bg-slate-800'
+                          }`}
+                        >
+                          Insert into Notepad
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Fully Editable Notes App Textarea - Amplified Spacing & Custom Design */}
+                <div className="flex-1 flex flex-col relative group">
+                  <textarea
+                    ref={textareaRef}
+                    value={notesText}
+                    onChange={handleNotesChange}
+                    placeholder="✍️ Start writing your custom notes here... Use the quick snippets above to format, and build an exceptional study plan!
+
+All inputs automatically save. Click 'Free Write Space' at the top right to expand this workspace even wider!"
+                    className={`w-full flex-1 p-5 bg-white border border-slate-200 hover:border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 rounded-2xl text-xs outline-hidden text-slate-700 resize-none font-sans leading-relaxed shadow-xs transition-all ${isNotepadExpanded ? 'min-h-[420px] text-sm' : 'min-h-[280px]'}`}
+                  ></textarea>
+
+                  {/* Word / Char Stats and Clearing actions */}
+                  <div className="absolute bottom-2.5 right-2.5 flex items-center gap-2 bg-slate-50/90 py-1.5 px-3 rounded-xl border border-slate-200/60 backdrop-blur-xs text-[10px] font-bold text-slate-500">
+                    <span>{charCount} characters</span>
+                    <span className="text-slate-300">•</span>
+                    <span>{wordCount} words</span>
+                    <span className="text-slate-300">|</span>
+                    <button
+                      type="button"
+                      onClick={handleClearNotes}
+                      className="text-rose-600 hover:text-rose-700 hover:underline cursor-pointer flex items-center gap-0.5 font-bold"
+                      title="Erase all notepad text"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Clear Notes</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Export and download toolbar */}
+                <div className="bg-white border-2 border-brand-ink/10 rounded-2xl p-4 shrink-0 space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-slate-400 font-black uppercase tracking-wider flex items-center gap-1">
+                      💾 Local File System:
                     </span>
                     <button
                       type="button"
-                      onClick={() => setActiveBuilderTemplate(null)}
-                      className="text-xs font-semibold text-slate-400 hover:text-slate-600 cursor-pointer"
+                      onClick={handleDownloadNotes}
+                      className="flex items-center gap-1 text-[10px] font-extrabold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 px-3 py-1.5 rounded-lg cursor-pointer transition-all"
+                      title="Download your study guide with these notes as a txt file"
                     >
-                      Cancel
+                      <Download className="w-3 h-3" />
+                      <span>Export as TXT file</span>
                     </button>
                   </div>
-
-                  <div className="grid grid-cols-1 gap-2.5">
-                    <div>
-                      <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider block mb-1">
-                        {activeBuilderTemplate === 'insight' && 'Insight Title'}
-                        {activeBuilderTemplate === 'action' && 'Task / Action Name'}
-                        {activeBuilderTemplate === 'question' && 'What needs clarifying?'}
-                        {activeBuilderTemplate === 'goal' && 'Goal Description'}
-                        {activeBuilderTemplate === 'reference' && 'Topic / Resource Name'}
-                      </label>
-                      <input 
-                        type="text"
-                        value={builderTitle}
-                        onChange={(e) => setBuilderTitle(e.target.value)}
-                        placeholder={
-                          activeBuilderTemplate === 'insight' ? 'e.g. Speed of Gravity Waves' :
-                          activeBuilderTemplate === 'action' ? 'e.g. Refactor API controllers' :
-                          activeBuilderTemplate === 'question' ? 'e.g. Why does token usage increase?' :
-                          activeBuilderTemplate === 'goal' ? 'e.g. Master React transitions' :
-                          'e.g. MDN - Closures documentation'
-                        }
-                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500"
-                      />
+                  
+                  <div className="border-t border-slate-100 pt-3 flex flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-brand-ink font-black uppercase tracking-wider flex items-center gap-1">
+                        <span className="w-1.5 h-1.5 rounded-full bg-[#C4342B] inline-block animate-pulse"></span>
+                        Cloud Study Packet:
+                      </span>
+                      <button
+                        type="button"
+                        disabled={isExportingDoc}
+                        onClick={handleExportGoogleDoc}
+                        className="flex items-center gap-1 text-[10px] font-black uppercase tracking-wider text-white bg-[#15171B] hover:bg-[#C4342B] disabled:opacity-50 px-3 py-1.5 rounded-lg cursor-pointer transition-all shadow-sm"
+                        title="Compile and upload an official study packet document directly to your Google Docs"
+                      >
+                        {isExportingDoc ? (
+                          <>
+                            <span className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                            <span>Compiling Packet...</span>
+                          </>
+                        ) : (
+                          <>
+                            <FileText className="w-3 h-3 text-[#F4F3EF]" />
+                            <span>Export Google Doc</span>
+                          </>
+                        )}
+                      </button>
                     </div>
 
-                    <div>
-                      <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider block mb-1">
-                        {activeBuilderTemplate === 'insight' && 'Key Observation'}
-                        {activeBuilderTemplate === 'action' && 'Specific Action Step'}
-                        {activeBuilderTemplate === 'question' && 'Current Doubt Details'}
-                        {activeBuilderTemplate === 'goal' && 'Learning Objective'}
-                        {activeBuilderTemplate === 'reference' && 'Source / URL Link'}
-                      </label>
-                      <input 
-                        type="text"
-                        value={builderField1}
-                        onChange={(e) => setBuilderField1(e.target.value)}
-                        placeholder={
-                          activeBuilderTemplate === 'insight' ? 'e.g. Travels at exactly the speed of light c.' :
-                          activeBuilderTemplate === 'action' ? 'e.g. Strip mock values and enforce strict payload schema.' :
-                          activeBuilderTemplate === 'question' ? 'e.g. Multiple redundant requests during re-renders.' :
-                          activeBuilderTemplate === 'goal' ? 'e.g. Complete responsive transition layouts smoothly.' :
-                          'e.g. https://developer.mozilla.org/en-US/docs/Web/JavaScript/Closures'
-                        }
-                        className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500"
-                      />
-                    </div>
+                    {exportDocError && (
+                      <p className="text-[9px] font-bold text-rose-600 bg-rose-50 p-2 rounded border border-rose-100">
+                        ⚠️ {exportDocError}
+                      </p>
+                    )}
 
-                    <div>
-                      <label className="text-[9px] font-black text-slate-500 uppercase tracking-wider block mb-1">
-                        {activeBuilderTemplate === 'insight' && 'Why It Matters'}
-                        {activeBuilderTemplate === 'action' && 'Priority'}
-                        {activeBuilderTemplate === 'question' && 'Proposed Resolution Path'}
-                        {activeBuilderTemplate === 'goal' && 'Key Milestones'}
-                        {activeBuilderTemplate === 'reference' && 'Key Points / Quick Notes'}
-                      </label>
-                      {activeBuilderTemplate === 'action' ? (
-                        <select
-                          value={builderField2}
-                          onChange={(e) => setBuilderField2(e.target.value)}
-                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500 cursor-pointer"
+                    {exportDocSuccessUrl && (
+                      <div className="flex items-center justify-between bg-emerald-50 border border-emerald-100 p-2.5 rounded-xl">
+                        <span className="text-[9px] font-bold text-emerald-800">🎉 Study Packet created!</span>
+                        <a 
+                          href={exportDocSuccessUrl} 
+                          target="_blank" 
+                          referrerPolicy="no-referrer"
+                          className="text-[9px] font-black uppercase bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-md transition-colors"
                         >
-                          <option value="High">🔴 High Priority</option>
-                          <option value="Medium">🟡 Medium Priority</option>
-                          <option value="Low">🟢 Low Priority</option>
-                        </select>
-                      ) : (
-                        <input 
-                          type="text"
-                          value={builderField2}
-                          onChange={(e) => setBuilderField2(e.target.value)}
-                          placeholder={
-                            activeBuilderTemplate === 'insight' ? 'e.g. Matches General Relativity predictions perfectly.' :
-                            activeBuilderTemplate === 'question' ? 'e.g. Implement strict useEffect dependency tracking.' :
-                            activeBuilderTemplate === 'goal' ? 'e.g. Run 3 practice setups with framer-motion.' :
-                            'e.g. Closures preserve state in outer scopes even after exit.'
-                          }
-                          className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500"
-                        />
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center justify-end gap-2 pt-1 border-t border-slate-200/30">
-                    <button
-                      type="button"
-                      onClick={() => setActiveBuilderTemplate(null)}
-                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-[10px] uppercase rounded-lg transition-colors cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleInsertBuilderTemplate}
-                      className={`px-3 py-1.5 font-bold text-[10px] uppercase rounded-lg text-white transition-colors cursor-pointer shadow-xs ${
-                        activeBuilderTemplate === 'insight' ? 'bg-amber-500 hover:bg-amber-600' :
-                        activeBuilderTemplate === 'action' ? 'bg-emerald-600 hover:bg-emerald-700' :
-                        activeBuilderTemplate === 'question' ? 'bg-indigo-600 hover:bg-indigo-700' :
-                        activeBuilderTemplate === 'goal' ? 'bg-rose-500 hover:bg-rose-600' :
-                        'bg-slate-700 hover:bg-slate-800'
-                      }`}
-                    >
-                      Insert into Notepad
-                    </button>
+                          Open Document
+                        </a>
+                      </div>
+                    )}
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* Fully Editable Notes App Textarea - Amplified Spacing & Custom Design */}
-            <div className="flex-1 flex flex-col relative group">
-              <textarea
-                ref={textareaRef}
-                value={notesText}
-                onChange={handleNotesChange}
-                placeholder="✍️ Start writing your custom notes here... Use the quick snippets above to format, and build an exceptional study plan!
-
-All inputs automatically save. Click 'Free Write Space' at the top right to expand this workspace even wider!"
-                className={`w-full flex-1 p-5 bg-white border border-slate-200 hover:border-slate-300 focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 rounded-2xl text-xs outline-hidden text-slate-700 resize-none font-sans leading-relaxed shadow-xs transition-all ${isNotepadExpanded ? 'min-h-[420px] text-sm' : 'min-h-[280px]'}`}
-              ></textarea>
-
-              {/* Word / Char Stats and Clearing actions */}
-              <div className="absolute bottom-2.5 right-2.5 flex items-center gap-2 bg-slate-50/90 py-1.5 px-3 rounded-xl border border-slate-200/60 backdrop-blur-xs text-[10px] font-bold text-slate-500">
-                <span>{charCount} characters</span>
-                <span className="text-slate-300">•</span>
-                <span>{wordCount} words</span>
-                <span className="text-slate-300">|</span>
-                <button
-                  onClick={handleClearNotes}
-                  className="text-rose-600 hover:text-rose-700 hover:underline cursor-pointer flex items-center gap-0.5 font-bold"
-                  title="Erase all notepad text"
-                >
-                  <Trash2 className="w-3 h-3" />
-                  <span>Clear Notes</span>
-                </button>
               </div>
-            </div>
+            ) : (
+              /* Smart Bookmarks Tab Content */
+              <div className="flex-1 flex flex-col space-y-4 animate-fade-in">
+                {/* Bookmarks Section Header */}
+                <div className="bg-gradient-to-r from-indigo-500 to-indigo-600 text-white p-4 rounded-2xl space-y-1 shadow-xs">
+                  <div className="flex items-center gap-1.5">
+                    <BookmarkIcon className="w-4 h-4 fill-white/10" />
+                    <h3 className="text-xs font-black uppercase tracking-wider font-display">
+                      Academic Smart Bookmarks
+                    </h3>
+                  </div>
+                  <p className="text-[10px] text-indigo-100 font-medium leading-relaxed">
+                    Tag specific moments, write academic notations, and instantly seek the video to precise chapters.
+                  </p>
+                </div>
 
-            {/* Export and download toolbar */}
-            <div className="flex items-center justify-between bg-white border border-slate-200/60 rounded-xl p-2.5 shrink-0">
-              <span className="text-[10px] text-slate-400 font-medium">
-                💾 Keep this report secure offline:
-              </span>
-              <button
-                onClick={handleDownloadNotes}
-                className="flex items-center gap-1 text-[10px] font-extrabold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 px-3 py-1.5 rounded-lg cursor-pointer transition-all"
-                title="Download your study guide with these notes as a txt file"
-              >
-                <Download className="w-3 h-3" />
-                <span>Export as TXT file</span>
-              </button>
-            </div>
+                {/* Bookmark Creation Form */}
+                <form onSubmit={handleCreateBookmark} className="bg-white border border-slate-200/60 p-4 rounded-2xl space-y-3 shadow-2xs">
+                  <span className="text-[9px] font-black text-slate-500 uppercase tracking-wider block">
+                    📌 Create Smart Bookmark:
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    {/* Timestamp Input Column */}
+                    <div className="sm:col-span-1 space-y-1">
+                      <label className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">
+                        Timestamp
+                      </label>
+                      <div className="flex gap-1.5">
+                        <input
+                          type="text"
+                          required
+                          placeholder="MM:SS (02:45)"
+                          value={bookmarkTimestamp}
+                          onChange={(e) => setBookmarkTimestamp(e.target.value)}
+                          className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500 font-mono font-bold text-slate-700"
+                        />
+                        {isAudio && (
+                          <button
+                            type="button"
+                            onClick={handleCaptureCurrentTime}
+                            className="px-2.5 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-indigo-700 rounded-lg text-xs font-black cursor-pointer flex items-center justify-center shrink-0"
+                            title="Capture current player playback time"
+                          >
+                            ⏱️
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Custom Annotation Column */}
+                    <div className="sm:col-span-2 space-y-1">
+                      <label className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">
+                        Academic Note
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        placeholder="e.g. Critique on Neural Transformer efficiency"
+                        value={bookmarkNote}
+                        onChange={(e) => setBookmarkNote(e.target.value)}
+                        className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg outline-hidden focus:border-indigo-500 font-medium text-slate-700"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-between items-center pt-1">
+                    <span className="text-[9px] text-slate-400 leading-tight">
+                      {isYouTube ? "💡 Enter seconds or minutes:seconds (e.g., 01:25)." : "💡 Sync playback live with the ⏱️ button!"}
+                    </span>
+                    <button
+                      type="submit"
+                      className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold text-[10px] uppercase rounded-lg transition-colors cursor-pointer shadow-2xs flex items-center gap-1"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Create Bookmark</span>
+                    </button>
+                  </div>
+                </form>
+
+                {/* Bookmarks Timeline List */}
+                <div className="flex-1 min-h-[220px] max-h-[380px] overflow-y-auto space-y-3 pr-1 scrollbar-thin">
+                  <span className="text-[9px] font-black text-slate-400 uppercase tracking-wider block mb-1">
+                    Chronological Timeline ({(video.bookmarks || []).length}):
+                  </span>
+
+                  {(!video.bookmarks || video.bookmarks.length === 0) ? (
+                    <div className="bg-slate-50 border border-slate-200/45 border-dashed rounded-2xl p-6 text-center space-y-2.5 my-2">
+                      <div className="w-9 h-9 bg-slate-100 rounded-full flex items-center justify-center mx-auto text-slate-400">
+                        <BookmarkIcon className="w-4 h-4" />
+                      </div>
+                      <div className="space-y-0.5">
+                        <h4 className="text-xs font-extrabold text-slate-700">No active bookmarks</h4>
+                        <p className="text-[10px] text-slate-400 max-w-xs mx-auto leading-relaxed">
+                          Pins moments of structural importance inside this video and write custom summary reviews.
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="relative border-l border-slate-200 pl-4.5 ml-2.5 space-y-4 pt-1 pb-2">
+                      {video.bookmarks.map((b) => {
+                        const isEditing = editingBookmarkId === b.id;
+                        return (
+                          <div key={b.id} className="relative group">
+                            {/* Chronological Circle Indicator */}
+                            <div className="absolute -left-[24.5px] top-1.5 w-3 h-3 rounded-full bg-indigo-600 border border-white flex items-center justify-center group-hover:scale-110 transition-transform">
+                              <span className="w-1 h-1 bg-white rounded-full"></span>
+                            </div>
+
+                            {/* Bookmark Main Card */}
+                            <div className="bg-white border border-slate-200 rounded-xl p-3 shadow-2xs hover:border-indigo-200 transition-all space-y-2.5">
+                              {isEditing ? (
+                                <div className="space-y-2.5">
+                                  <div className="grid grid-cols-3 gap-2">
+                                    <div className="col-span-1">
+                                      <input
+                                        type="text"
+                                        value={editingTimestamp}
+                                        onChange={(e) => setEditingTimestamp(e.target.value)}
+                                        className="w-full px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-md font-mono text-center font-bold"
+                                      />
+                                    </div>
+                                    <div className="col-span-2">
+                                      <input
+                                        type="text"
+                                        value={editingNote}
+                                        onChange={(e) => setEditingNote(e.target.value)}
+                                        className="w-full px-2 py-1 text-xs bg-slate-50 border border-slate-200 rounded-md font-medium"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="flex justify-end gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => setEditingBookmarkId(null)}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-600 text-[10px] font-bold uppercase rounded-md cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleUpdateBookmark(b.id)}
+                                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-[10px] font-bold uppercase rounded-md cursor-pointer"
+                                    >
+                                      Save
+                                    </button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <>
+                                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                                    {/* Play button seeking timestamp */}
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSeek(b.timestamp)}
+                                      className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 font-extrabold text-[10px] py-1 px-2.5 rounded-lg border border-indigo-200/50 flex items-center gap-1 transition-all cursor-pointer shadow-3xs"
+                                      title="Seek video player to this timestamp segment"
+                                    >
+                                      <Play className="w-2.5 h-2.5 fill-indigo-600 stroke-none" />
+                                      <span className="font-mono">{b.timestamp}</span>
+                                    </button>
+
+                                    <div className="flex items-center gap-1 opacity-60 hover:opacity-100 transition-opacity">
+                                      {/* Export to study notes */}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSendBookmarkToNotepad(b)}
+                                        className="p-1 text-slate-500 hover:text-indigo-600 rounded-md hover:bg-slate-50 transition-colors cursor-pointer"
+                                        title="Send this citation note into Study Notepad"
+                                      >
+                                        <FileText className="w-3.5 h-3.5" />
+                                      </button>
+
+                                      {/* Edit */}
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingBookmarkId(b.id);
+                                          setEditingTimestamp(b.timestamp);
+                                          setEditingNote(b.note);
+                                        }}
+                                        className="p-1 text-slate-500 hover:text-indigo-600 rounded-md hover:bg-slate-50 transition-colors cursor-pointer"
+                                        title="Edit bookmark"
+                                      >
+                                        <Edit3 className="w-3.5 h-3.5" />
+                                      </button>
+
+                                      {/* Delete */}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteBookmark(b.id)}
+                                        className="p-1 text-rose-500 hover:text-rose-700 rounded-md hover:bg-rose-50 transition-colors cursor-pointer"
+                                        title="Delete bookmark"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  <p className="text-xs font-semibold text-slate-700 leading-relaxed italic bg-slate-50/50 p-2 rounded-lg border border-slate-100">
+                                    "{b.note}"
+                                  </p>
+                                </>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
 
             {/* Discovered External Resource Links Section */}
             <div className="space-y-3 shrink-0">

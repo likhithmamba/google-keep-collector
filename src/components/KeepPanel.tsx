@@ -31,6 +31,7 @@ interface KeepPanelProps {
   onQuickNote: (url: string) => void;
   onAiCurate: (url: string) => void;
   isAnalyzing: boolean;
+  onOpenImportModal: () => void;
 }
 
 const KEEP_COLORS = [
@@ -57,7 +58,8 @@ export default function KeepPanel({
   onSelectVideo,
   onQuickNote,
   onAiCurate,
-  isAnalyzing
+  isAnalyzing,
+  onOpenImportModal
 }: KeepPanelProps) {
   const [search, setSearch] = useState('');
   const [newTitle, setNewTitle] = useState('');
@@ -270,16 +272,27 @@ export default function KeepPanel({
           </div>
         </div>
 
-        {/* Quick Launch Google Keep */}
-        <a 
-          href="https://keep.google.com" 
-          target="_blank" 
-          rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-[10px] text-amber-600 font-bold hover:text-amber-700 bg-amber-50 hover:bg-amber-100/70 px-3 py-1.5 rounded-xl border border-amber-200/50 cursor-pointer transition-colors"
-        >
-          <span>Open Keep</span>
-          <ExternalLink className="w-3 h-3" />
-        </a>
+        {/* Quick Launch Google Keep with Bulk Import */}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpenImportModal}
+            className="flex items-center gap-1.5 text-[10px] text-[#C4342B] font-black uppercase bg-rose-50 hover:bg-rose-100 px-3 py-1.5 rounded-xl border border-rose-200/50 cursor-pointer transition-colors"
+            title="Import Google Keep Takeout JSON clipboard files"
+          >
+            <span>Import Takeout</span>
+          </button>
+          
+          <a 
+            href="https://keep.google.com" 
+            target="_blank" 
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 text-[10px] text-amber-600 font-bold hover:text-amber-700 bg-amber-50 hover:bg-amber-100/70 px-3 py-1.5 rounded-xl border border-amber-200/50 cursor-pointer transition-colors"
+          >
+            <span>Open Keep</span>
+            <ExternalLink className="w-3 h-3" />
+          </a>
+        </div>
       </div>
 
       {/* Sync tips info block */}

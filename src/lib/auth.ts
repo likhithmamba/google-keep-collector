@@ -10,6 +10,8 @@ const provider = new GoogleAuthProvider();
 provider.addScope('https://www.googleapis.com/auth/tasks');
 provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
 provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+provider.addScope('https://www.googleapis.com/auth/documents');
+provider.addScope('https://www.googleapis.com/auth/drive.file');
 
 let isSigningIn = false;
 let cachedAccessToken: string | null = null;
@@ -172,4 +174,65 @@ export const deleteGoogleTask = async (taskId: string, tokenOverride?: string): 
   }
 
   return true;
+};
+
+// Google Docs API Helper: Create a stylized Study Packet Document
+export const createGoogleDocStudyPacket = async (
+  title: string,
+  contentBody: string,
+  tokenOverride?: string
+): Promise<{ documentId: string; alternateLink: string } | null> => {
+  const token = tokenOverride || await getAccessToken();
+  if (!token) {
+    throw new Error('User is not authenticated or access token is missing');
+  }
+
+  // 1. Create a blank document
+  const createResponse = await fetch('https://docs.googleapis.com/v1/documents', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      title,
+    }),
+  });
+
+  if (!createResponse.ok) {
+    const errData = await createResponse.json().catch(() => ({}));
+    throw new Error(errData?.error?.message || 'Failed to create Google Document');
+  }
+
+  const doc = await createResponse.json();
+  const documentId = doc.documentId;
+
+  // 2. Insert the styled study packet content
+  const requests = [
+    {
+      insertText: {
+        location: { index: 1 },
+        text: contentBody
+      }
+    }
+  ];
+
+  const updateResponse = await fetch(`https://docs.googleapis.com/v1/documents/${documentId}:batchUpdate`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ requests }),
+  });
+
+  if (!updateResponse.ok) {
+    const errData = await updateResponse.json().catch(() => ({}));
+    throw new Error(errData?.error?.message || 'Failed to populate Google Document');
+  }
+
+  return {
+    documentId,
+    alternateLink: `https://docs.google.com/document/d/${documentId}/edit`
+  };
 };

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <!-- Main rounded square with top-right corner cut -->
+  <path d="M 16,0 A 16,16 0 0 0 0,16 L 0,84 A 16,16 0 0 0 16,100 L 84,100 A 16,16 0 0 0 100,84 L 100,32 L 68,0 Z" fill="#15171B" />
+  <!-- Dog-ear fold showing the red underside -->
+  <path d="M 68,0 L 68,16 A 16,16 0 0 0 84,32 L 100,32 Z" fill="#C4342B" />
+</svg>
