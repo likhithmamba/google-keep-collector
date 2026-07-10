@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { User } from 'firebase/auth';
+import { GoogleUser as User } from './lib/auth';
 import { motion, AnimatePresence } from 'motion/react';
 import { 
   initAuth, 
@@ -358,7 +358,7 @@ export default function App() {
   const handleSignIn = async () => {
     setIsAuthLoading(true);
     try {
-      const result = await googleSignIn();
+      const result = await googleSignIn(appSettings.googleClientId);
       if (result) {
         setUser(result.user);
         setToken(result.accessToken);
@@ -381,11 +381,11 @@ export default function App() {
         showToast(`Successfully signed in as ${result.user.displayName || result.user.email}!`, 'success');
       }
     } catch (err: any) {
-      if (err?.code === 'auth/popup-closed-by-user' || err?.message?.includes('popup-closed-by-user')) {
+      if (err?.code === 'auth/popup-closed-by-user' || err?.message?.includes('popup-closed-by-user') || err?.message?.includes('cancelled')) {
         showToast('Sign-in cancelled: The login popup was closed.', 'info');
       } else {
         console.error('Sign-in failed', err);
-        showToast('Sign-in failed. Please check popup permissions and try again.', 'error');
+        showToast(err.message || 'Sign-in failed. Please check popup permissions and try again.', 'error');
       }
     } finally {
       setIsAuthLoading(false);
@@ -396,7 +396,7 @@ export default function App() {
   const handleLinkNewAccount = async () => {
     setIsAuthLoading(true);
     try {
-      const result = await googleSignIn();
+      const result = await googleSignIn(appSettings.googleClientId);
       if (result) {
         const newAccount: LinkedAccount = {
           email: result.user.email || 'unknown@gmail.com',
@@ -422,11 +422,11 @@ export default function App() {
         showToast(`Successfully connected Google Account: ${newAccount.email}!`, 'success');
       }
     } catch (err: any) {
-      if (err?.code === 'auth/popup-closed-by-user' || err?.message?.includes('popup-closed-by-user')) {
+      if (err?.code === 'auth/popup-closed-by-user' || err?.message?.includes('popup-closed-by-user') || err?.message?.includes('cancelled')) {
         showToast('Linking cancelled: The login popup was closed.', 'info');
       } else {
         console.error("Failed to link new Google account:", err);
-        showToast('Failed to link Google account. Please try again.', 'error');
+        showToast(err.message || 'Failed to link Google account. Please try again.', 'error');
       }
     } finally {
       setIsAuthLoading(false);
@@ -1714,6 +1714,18 @@ Synced via CurateMind AI`;
           setAppSettings(newSettings);
           localStorage.setItem('tubekeep_settings', JSON.stringify(newSettings));
         }}
+        videos={videos}
+        onUpdateVideos={(updatedVideos) => {
+          setVideos(updatedVideos);
+        }}
+        user={user}
+        token={token}
+        onSetToken={setToken}
+        onSetUser={setUser}
+        linkedAccounts={linkedAccounts}
+        onUpdateLinkedAccounts={setLinkedAccounts}
+        onLinkNewAccount={handleLinkNewAccount}
+        onUnlinkAccount={handleUnlinkAccount}
       />
 
       {/* Onboarding Interactive Guided Tour */}

@@ -1,4 +1,4 @@
-import { User } from 'firebase/auth';
+import { GoogleUser as User } from '../lib/auth';
 import { LogIn, LogOut, User as UserIcon } from 'lucide-react';
 
 interface SignInButtonProps {

@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Link2, Sparkles, AlertCircle, RefreshCw } from 'lucide-react';
+import { isThresholdExceeded, getTokenThreshold } from '../lib/tokenTracker';
 
 interface VideoFormProps {
   onAnalyze: (url: string) => Promise<void>;
@@ -13,6 +14,24 @@ export default function VideoForm({ onAnalyze, isAnalyzing, value, onChange }: V
   const url = value !== undefined ? value : localUrl;
   const setUrl = onChange !== undefined ? onChange : setLocalUrl;
   const [error, setError] = useState<string | null>(null);
+  
+  const [exceeded, setExceeded] = useState(isThresholdExceeded());
+  const [threshold, setThreshold] = useState(getTokenThreshold());
+
+  useEffect(() => {
+    const handleUpdate = () => {
+      setExceeded(isThresholdExceeded());
+      setThreshold(getTokenThreshold());
+    };
+    
+    // Initial fetch
+    handleUpdate();
+
+    window.addEventListener('marginalia-token-updated', handleUpdate);
+    return () => {
+      window.removeEventListener('marginalia-token-updated', handleUpdate);
+    };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -56,6 +75,18 @@ export default function VideoForm({ onAnalyze, isAnalyzing, value, onChange }: V
       <p className="text-xs text-slate-500 mb-5 leading-relaxed">
         Paste any video, audio, podcast, or external webpage link below. Our server-side Gemini AI will analyze the metadata, rate educational quality, strip clickbait, and write high-fidelity study outlines instantly.
       </p>
+
+      {exceeded && (
+        <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-xl p-3.5 mb-5 text-[11px] text-amber-800 leading-normal animate-pulse">
+          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <span className="font-extrabold block">Notice: Individual Context Safety Range Exceeded</span>
+            <span className="text-slate-500 font-medium block mt-0.5">
+              Your cumulative token usage exceeds your configured warning threshold ({threshold.toLocaleString()} Chars). Further requests will succeed, but monitor your personal API key limits to prevent billing surprises.
+            </span>
+          </div>
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="relative">

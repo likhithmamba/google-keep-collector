@@ -1,65 +1,203 @@
-import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+// Secure 100% Client-Side Google OAuth 2.0 Integration
+// Completely independent of Firebase. Stores tokens in memory / secure sessionStorage.
 
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
+export interface GoogleUser {
+  email: string;
+  displayName: string;
+  photoURL: string;
+}
 
-const provider = new GoogleAuthProvider();
-// Add required scopes
-provider.addScope('https://www.googleapis.com/auth/tasks');
-provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
-provider.addScope('https://www.googleapis.com/auth/userinfo.email');
-provider.addScope('https://www.googleapis.com/auth/documents');
-provider.addScope('https://www.googleapis.com/auth/drive.file');
-
-let isSigningIn = false;
 let cachedAccessToken: string | null = null;
+let cachedUser: GoogleUser | null = null;
+let oauthMessageListenerRegistered = false;
 
-// Initialize auth state listener
-export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
-  onAuthFailure?: () => void
-) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      if (cachedAccessToken) {
-        if (onAuthSuccess) onAuthSuccess(user, cachedAccessToken);
-      } else {
-        // Since Firebase Auth token isn't automatically cached on page reload,
-        // we will let the user click login to refresh the token, or we can handle
-        // state gracefully.
-        if (onAuthFailure) onAuthFailure();
-      }
-    } else {
-      cachedAccessToken = null;
-      if (onAuthFailure) onAuthFailure();
-    }
+// Generate cryptographically secure random state to protect against CSRF attacks
+function generateState(): string {
+  const array = new Uint32Array(4);
+  window.crypto.getRandomValues(array);
+  return Array.from(array, dec => ('0' + dec.toString(16)).slice(-2)).join('');
+}
+
+// Build standard Google OAuth 2.0 implicit authorization endpoint URL
+export const getGoogleAuthUrl = (clientId: string, state: string): string => {
+  const redirectUri = window.location.origin + '/'; // Must match Authorized Redirect URIs in Google Cloud Console
+  const scopes = [
+    'https://www.googleapis.com/auth/tasks',
+    'https://www.googleapis.com/auth/userinfo.profile',
+    'https://www.googleapis.com/auth/userinfo.email',
+    'https://www.googleapis.com/auth/documents',
+    'https://www.googleapis.com/auth/drive.file'
+  ];
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: 'token',
+    scope: scopes.join(' '),
+    state: state,
+    prompt: 'select_account'
   });
+  return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
 };
 
-// Google Sign-In
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string } | null> => {
-  try {
-    isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Failed to get access token from Google Auth');
-    }
+// Check if current page load is actually an active Google OAuth callback redirect inside the popup
+const handleCallbackIfPopup = async () => {
+  const hash = window.location.hash.substring(1);
+  if (!hash) return;
 
-    cachedAccessToken = credential.accessToken;
-    return { user: result.user, accessToken: cachedAccessToken };
-  } catch (error: any) {
-    if (error?.code === 'auth/popup-closed-by-user' || error?.message?.includes('popup-closed-by-user')) {
-      console.warn('Google Auth popup was closed by the user before completion.');
-    } else {
-      console.error('Sign in error:', error);
+  const params = new URLSearchParams(hash);
+  const accessToken = params.get('access_token');
+  const state = params.get('state');
+
+  if (accessToken && window.opener) {
+    try {
+      // Validate CSRF state parameter to prevent Session Hijacking / Injection
+      const savedState = sessionStorage.getItem('oauth_state');
+      if (!savedState || state !== savedState) {
+        console.error('OAuth Security Check Failed: State parameter mismatch or expired.');
+        window.close();
+        return;
+      }
+
+      // Remove single-use state token immediately
+      sessionStorage.removeItem('oauth_state');
+
+      // Retrieve user's Google profile securely
+      const res = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+        headers: { Authorization: `Bearer ${accessToken}` }
+      });
+      if (!res.ok) throw new Error('Google profile retrieval failed');
+      const profile = await res.json();
+
+      // Send payload securely back to opener window (enforces exact same-origin)
+      window.opener.postMessage({
+        type: 'GOOGLE_OAUTH_SUCCESS',
+        accessToken,
+        user: {
+          email: profile.email,
+          displayName: profile.name,
+          photoURL: profile.picture
+        }
+      }, window.location.origin);
+
+      // Close login popup gracefully
+      window.close();
+    } catch (error) {
+      console.error('OAuth profile payload extraction error:', error);
+      window.close();
     }
-    throw error;
-  } finally {
-    isSigningIn = false;
   }
+};
+
+// Initialize auth state and listen for incoming secure OAuth postMessages
+export const initAuth = (
+  onAuthSuccess?: (user: GoogleUser, token: string) => void,
+  onAuthFailure?: () => void
+) => {
+  if (typeof window === 'undefined') return;
+
+  // 1. Setup secure cross-window communicator
+  if (!oauthMessageListenerRegistered) {
+    window.addEventListener('message', (event) => {
+      // Security measure: strictly enforce same-origin source check
+      if (event.origin !== window.location.origin) return;
+
+      if (event.data?.type === 'GOOGLE_OAUTH_SUCCESS') {
+        const { accessToken, user } = event.data;
+        cachedAccessToken = accessToken;
+        cachedUser = user;
+
+        // Persist session-scoped cache
+        const expiry = Date.now() + 3500 * 1000; // Keep slightly below 1 hour expiration window
+        sessionStorage.setItem('tubekeep_google_auth', JSON.stringify({
+          user,
+          token: accessToken,
+          expiry
+        }));
+
+        if (onAuthSuccess) onAuthSuccess(user, accessToken);
+      }
+    });
+    oauthMessageListenerRegistered = true;
+  }
+
+  // 2. Proactively parse hash parameters if this instance is running as the Google redirect destination
+  handleCallbackIfPopup();
+
+  // 3. Load active session cache if it has not expired yet
+  const cached = sessionStorage.getItem('tubekeep_google_auth');
+  if (cached) {
+    try {
+      const { user, token, expiry } = JSON.parse(cached);
+      if (Date.now() < expiry) {
+        cachedAccessToken = token;
+        cachedUser = user;
+        if (onAuthSuccess) onAuthSuccess(user, token);
+        return;
+      }
+    } catch (e) {
+      sessionStorage.removeItem('tubekeep_google_auth');
+    }
+  }
+
+  if (onAuthFailure) onAuthFailure();
+};
+
+// Google Sign-In with popup
+export const googleSignIn = async (clientId?: string): Promise<{ user: GoogleUser; accessToken: string } | null> => {
+  if (!clientId) {
+    throw new Error('Google Client ID Required: Please open Settings (gear icon) and configure your Google OAuth Client ID to log in!');
+  }
+
+  const state = generateState();
+  sessionStorage.setItem('oauth_state', state);
+
+  const authUrl = getGoogleAuthUrl(clientId, state);
+
+  const width = 500;
+  const height = 650;
+  const left = window.screen.width / 2 - width / 2;
+  const top = window.screen.height / 2 - height / 2;
+
+  const popup = window.open(
+    authUrl,
+    'Google_OAuth_Sign_In',
+    `width=${width},height=${height},left=${left},top=${top},status=no,resizable=yes,scrollbars=yes`
+  );
+
+  if (!popup) {
+    throw new Error('Popup blocked! Please allow popups for this site to log in with Google.');
+  }
+
+  return new Promise((resolve, reject) => {
+    let checkTimer: any = null;
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+
+      if (event.data?.type === 'GOOGLE_OAUTH_SUCCESS') {
+        if (checkTimer) clearInterval(checkTimer);
+        window.removeEventListener('message', handleMessage);
+        resolve({
+          user: event.data.user,
+          accessToken: event.data.accessToken
+        });
+      }
+    };
+
+    window.addEventListener('message', handleMessage);
+
+    // Periodically monitor popup status to reject when user cancels out
+    checkTimer = setInterval(() => {
+      if (popup.closed) {
+        clearInterval(checkTimer);
+        window.removeEventListener('message', handleMessage);
+        // Timeout check to ensure we didn't resolve immediately before this ticks
+        setTimeout(() => {
+          reject(new Error('Sign-in cancelled: The login popup was closed.'));
+        }, 100);
+      }
+    }, 500);
+  });
 };
 
 export const getAccessToken = async (): Promise<string | null> => {
@@ -67,8 +205,9 @@ export const getAccessToken = async (): Promise<string | null> => {
 };
 
 export const logout = async () => {
-  await auth.signOut();
+  sessionStorage.removeItem('tubekeep_google_auth');
   cachedAccessToken = null;
+  cachedUser = null;
 };
 
 // Google Tasks API Helper: Sync video summary as a Task

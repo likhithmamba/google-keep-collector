@@ -20,9 +20,9 @@ import {
   fetchGoogleTasks, 
   updateGoogleTaskStatus, 
   deleteGoogleTask, 
-  createGoogleTask 
+  createGoogleTask,
+  GoogleUser as FirebaseUser
 } from '../lib/auth';
-import { User as FirebaseUser } from 'firebase/auth';
 import { LinkedAccount } from '../types';
 
 interface TasksPanelProps {

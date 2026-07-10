@@ -1,4 +1,5 @@
 import { AppSettings, VideoItem } from '../types';
+import { trackRequest } from './tokenTracker';
 
 // Extract YouTube video ID
 export function extractVideoId(url: string): string | null {
@@ -142,6 +143,8 @@ Please provide a highly complete analysis of this resource:
       throw new Error("Empty response from OpenRouter model.");
     }
 
+    trackRequest("Generate Summary", modelName, prompt, rawText);
+
     let cleanText = rawText.trim();
     if (cleanText.startsWith("```json")) {
       cleanText = cleanText.substring(7);
@@ -235,6 +238,8 @@ Please provide a highly complete analysis of this resource:
       throw new Error("No candidates returned from Gemini API. Your API key might be restricted or incorrect.");
     }
 
+    trackRequest("Generate Summary", "gemini-2.5-flash-direct", prompt, rawText);
+
     const result = JSON.parse(rawText.trim());
     return {
       id: videoId || 'resource-' + Date.now(),
@@ -325,6 +330,8 @@ Return the response strictly as a JSON object with:
       throw new Error("Empty response from OpenRouter model.");
     }
 
+    trackRequest("Generate Transcript", modelName, prompt, rawText);
+
     let cleanText = rawText.trim();
     if (cleanText.startsWith("```json")) {
       cleanText = cleanText.substring(7);
@@ -393,6 +400,8 @@ Return the response strictly as a JSON object with:
     if (!rawText) {
       throw new Error("No candidates returned from Gemini API. Your API key might be restricted or incorrect.");
     }
+
+    trackRequest("Generate Transcript", "gemini-2.5-flash-direct", prompt, rawText);
 
     return JSON.parse(rawText.trim());
   }

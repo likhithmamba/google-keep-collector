@@ -79,6 +79,7 @@ export interface AppSettings {
   customGeminiApiKey: string;
   useOpenRouter: boolean;
   openRouterModel: string;
+  googleClientId: string;
   settingsPassword?: string;
   isSettingsLocked?: boolean;
   encryptLocalStorage?: boolean;
