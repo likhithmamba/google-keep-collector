@@ -1,5 +1,6 @@
-import { VideoItem, Bookmark } from '../types';
+import { VideoItem, Bookmark, AppSettings } from '../types';
 import { createGoogleDocStudyPacket } from '../lib/auth';
+import { generateTranscript as generateClientTranscript } from '../lib/gemini';
 import { 
   X, 
   ExternalLink, 
@@ -50,6 +51,7 @@ interface VideoDetailModalProps {
   isSyncedToTasks: boolean;
   isInKeep: boolean;
   onUpdateVideo: (updatedVideo: VideoItem) => void;
+  appSettings: AppSettings;
 }
 
 const KEEP_MODAL_COLORS = [
@@ -73,7 +75,8 @@ export default function VideoDetailModal({
   onSyncTasks,
   isSyncedToTasks,
   isInKeep,
-  onUpdateVideo
+  onUpdateVideo,
+  appSettings
 }: VideoDetailModalProps) {
   const [copied, setCopied] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
@@ -126,24 +129,7 @@ export default function VideoDetailModal({
     setIsGeneratingTranscript(true);
     setTranscriptError(null);
     try {
-      const response = await fetch('/api/transcript', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          url: video.url,
-          title: video.title,
-          summary: video.summary,
-        }),
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.error || `HTTP error ${response.status}`);
-      }
-
-      const data = await response.json();
+      const data = await generateClientTranscript(video.url, video.title, video.summary, appSettings);
       if (!data.segments || !Array.isArray(data.segments)) {
         throw new Error('Received invalid transcript structure from Gemini');
       }

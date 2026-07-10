@@ -9,6 +9,7 @@ import {
   getAccessToken 
 } from './lib/auth';
 import { presetVideos } from './lib/presets';
+import { generateSummary } from './lib/gemini';
 import { VideoItem, KeepNote, CategoryType, LinkedAccount, AppSettings } from './types';
 import SignInButton from './components/SignInButton';
 import VideoForm from './components/VideoForm';
@@ -377,9 +378,15 @@ export default function App() {
           localStorage.setItem('tubekeep_linked_accounts', JSON.stringify(updated));
           return updated;
         });
+        showToast(`Successfully signed in as ${result.user.displayName || result.user.email}!`, 'success');
       }
-    } catch (err) {
-      console.error('Sign-in failed', err);
+    } catch (err: any) {
+      if (err?.code === 'auth/popup-closed-by-user' || err?.message?.includes('popup-closed-by-user')) {
+        showToast('Sign-in cancelled: The login popup was closed.', 'info');
+      } else {
+        console.error('Sign-in failed', err);
+        showToast('Sign-in failed. Please check popup permissions and try again.', 'error');
+      }
     } finally {
       setIsAuthLoading(false);
     }
@@ -412,11 +419,15 @@ export default function App() {
 
         // Force tasks panel to reload
         setTasksTrigger(prev => prev + 1);
-        alert(`Successfully connected Google Account: ${newAccount.email}!`);
+        showToast(`Successfully connected Google Account: ${newAccount.email}!`, 'success');
       }
-    } catch (err) {
-      console.error("Failed to link new Google account:", err);
-      alert("Failed to link Google account. Please try again.");
+    } catch (err: any) {
+      if (err?.code === 'auth/popup-closed-by-user' || err?.message?.includes('popup-closed-by-user')) {
+        showToast('Linking cancelled: The login popup was closed.', 'info');
+      } else {
+        console.error("Failed to link new Google account:", err);
+        showToast('Failed to link Google account. Please try again.', 'error');
+      }
     } finally {
       setIsAuthLoading(false);
     }
@@ -457,29 +468,11 @@ export default function App() {
     }
   };
 
-  // Analyze a video via Express + Gemini Backend
+  // Analyze a video/resource via client-side Gemini Client
   const handleAnalyzeVideo = async (url: string) => {
     setIsAnalyzing(true);
     try {
-      const response = await fetch('/api/summarize', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ 
-          url,
-          openRouterApiKey: appSettings.useOpenRouter ? appSettings.openRouterApiKey : undefined,
-          customGeminiApiKey: appSettings.customGeminiApiKey || undefined,
-          openRouterModel: appSettings.useOpenRouter ? appSettings.openRouterModel : undefined
-        }),
-      });
-
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData?.error || 'Failed to analyze the video. Please check your network and try again.');
-      }
-
-      const newVideo: VideoItem = await response.json();
+      const newVideo = await generateSummary(url, appSettings, false);
       
       // Prevent duplicates, insert new video at the top
       setVideos((prev) => {
@@ -1616,6 +1609,7 @@ Synced via CurateMind AI`;
           isSyncedToTasks={syncedTaskIds.includes(selectedVideo.id)}
           isInKeep={keepNotes.some(note => note.id === `keep-${selectedVideo.id}` || note.videoId === selectedVideo.id)}
           onUpdateVideo={handleUpdateVideo}
+          appSettings={appSettings}
         />
       )}
 

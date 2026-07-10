@@ -1,6 +1,7 @@
 import React, { useState, useRef } from 'react';
 import { X, FileJson, Link, Check, Loader2, Play, Square, AlertCircle, CheckCircle2, HelpCircle, Info, RefreshCw } from 'lucide-react';
 import { VideoItem } from '../types';
+import { generateSummary } from '../lib/gemini';
 
 interface KeepImportModalProps {
   isOpen: boolean;
@@ -172,26 +173,7 @@ export default function KeepImportModal({
       ));
 
       try {
-        const response = await fetch('/api/summarize', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            url: item.url,
-            isBulkImport: importTier === 'lite',
-            openRouterApiKey: appSettings.useOpenRouter ? appSettings.openRouterApiKey : undefined,
-            customGeminiApiKey: appSettings.customGeminiApiKey || undefined,
-            openRouterModel: appSettings.useOpenRouter ? appSettings.openRouterModel : undefined
-          })
-        });
-
-        if (!response.ok) {
-          const errData = await response.json().catch(() => ({}));
-          throw new Error(errData?.error || `HTTP error ${response.status}`);
-        }
-
-        const curatedData: VideoItem = await response.json();
+        const curatedData = await generateSummary(item.url, appSettings, importTier === 'lite');
         const finalVideo: VideoItem = {
           ...curatedData,
           id: curatedData.videoId || `bulk-${Date.now()}-${Math.random()}`,
