@@ -466,6 +466,17 @@ export default function SettingsModal({
     onSaveSettings(nextSettings);
   };
 
+  const handleMapCategoryToAccount = (category: string, email: string) => {
+    const currentMap = settings.categoryAccountMap || {};
+    const newMap = { ...currentMap };
+    if (email === '') {
+      delete newMap[category];
+    } else {
+      newMap[category] = email;
+    }
+    handleSave({ categoryAccountMap: newMap });
+  };
+
   if (!isOpen) return null;
 
   // Unlock with password
@@ -1535,6 +1546,51 @@ export default function SettingsModal({
                     )}
                   </div>
                 </div>
+
+                {/* Smart Category-Based Account Routing */}
+                {linkedAccounts.length > 0 && (
+                  <div className="bg-white border border-slate-200 rounded-2xl p-4.5 space-y-4">
+                    <div className="flex items-center gap-2">
+                      <Terminal className="w-4 h-4 text-emerald-600" />
+                      <h3 className="font-extrabold text-xs text-slate-700 uppercase tracking-wider font-display">Smart Category-Based Account Routing</h3>
+                    </div>
+
+                    <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                      Automatically route Google Tasks exports to specific connected accounts depending on the video's classified study category. Mapped categories export directly to their assigned accounts.
+                    </p>
+
+                    <div className="border border-slate-150 rounded-xl overflow-hidden divide-y divide-slate-150 bg-white">
+                      {[
+                        'AI & Data Science',
+                        'Technology & Development',
+                        'Productivity & Design',
+                        'Business & Finance',
+                        'Science & Education',
+                        'Entertainment',
+                        'Lifestyle & Health'
+                      ].map((category) => {
+                        const mappedEmail = (settings.categoryAccountMap || {})[category] || '';
+                        return (
+                          <div key={category} className="flex items-center justify-between p-3 gap-4 flex-wrap">
+                            <span className="text-xs font-bold text-slate-700 font-display">{category}</span>
+                            <select
+                              value={mappedEmail}
+                              onChange={(e) => handleMapCategoryToAccount(category, e.target.value)}
+                              className="text-xs font-semibold p-1.5 border border-slate-200 rounded-lg bg-slate-50 hover:bg-slate-100 text-slate-700 outline-none max-w-xs cursor-pointer focus:border-brand-ink"
+                            >
+                              <option value="">Default (First Linked / Active Account)</option>
+                              {linkedAccounts.map((acc) => (
+                                <option key={acc.email} value={acc.email}>
+                                  {acc.displayName} ({acc.email})
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 {/* Developer Command Station Manual Token Paste Override */}
                 <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4.5 space-y-4 text-slate-100">

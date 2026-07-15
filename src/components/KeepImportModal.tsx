@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { X, FileJson, Link, Check, Loader2, Play, Square, AlertCircle, CheckCircle2, HelpCircle, Info, RefreshCw } from 'lucide-react';
+import { X, FileJson, Link, Check, Loader2, Play, Square, AlertCircle, CheckCircle2, HelpCircle, Info, RefreshCw, FileText, ClipboardList } from 'lucide-react';
 import { VideoItem } from '../types';
 import { generateSummary } from '../lib/gemini';
 
@@ -22,6 +22,8 @@ interface ExtractedLinkItem {
   error?: string;
 }
 
+type TabType = 'upload' | 'paste';
+
 export default function KeepImportModal({
   isOpen,
   onClose,
@@ -30,12 +32,15 @@ export default function KeepImportModal({
   appSettings,
   showToast
 }: KeepImportModalProps) {
+  const [activeTab, setActiveTab] = useState<TabType>('upload');
   const [dragActive, setDragActive] = useState(false);
   const [isProcessingFiles, setIsProcessingFiles] = useState(false);
   const [extractedLinks, setExtractedLinks] = useState<ExtractedLinkItem[]>([]);
   const [importTier, setImportTier] = useState<'lite' | 'deep'>('lite');
   const [isImporting, setIsImporting] = useState(false);
   const [currentImportIndex, setCurrentImportIndex] = useState(-1);
+  const [rawPasteText, setRawPasteText] = useState('');
+  
   const importStopRequested = useRef(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -45,6 +50,34 @@ export default function KeepImportModal({
     const urlRegex = /(https?:\/\/[^\s\n\r"']+)/gi;
     const matches = text.match(urlRegex);
     return matches ? Array.from(new Set(matches)) : [];
+  };
+
+  const parseCsv = (csvText: string): string[] => {
+    const urls: string[] = [];
+    const lines = csvText.split(/\r?\n/);
+    if (lines.length === 0) return [];
+    
+    const headers = lines[0].split(',').map(h => h.trim().toLowerCase());
+    const urlColIndex = headers.indexOf('url');
+    
+    if (urlColIndex !== -1) {
+      for (let i = 1; i < lines.length; i++) {
+        if (!lines[i].trim()) continue;
+        const cols = lines[i].split(',');
+        if (cols[urlColIndex]) {
+          const urlVal = cols[urlColIndex].trim().replace(/^["']|["']$/g, '');
+          if (urlVal.startsWith('http')) {
+            urls.push(urlVal);
+          }
+        }
+      }
+    } else {
+      lines.forEach(line => {
+        const found = extractUrlsFromText(line);
+        urls.push(...found);
+      });
+    }
+    return Array.from(new Set(urls));
   };
 
   const handleDrag = (e: React.DragEvent) => {
@@ -57,9 +90,9 @@ export default function KeepImportModal({
     }
   };
 
-  const processKeepFiles = async (files: FileList) => {
+  const processImportFiles = async (files: FileList) => {
     setIsProcessingFiles(true);
-    const linkItemsMap: Record<string, ExtractedLinkItem> = {};
+    const linkItemsMap: Record<string, ExtractedLinkItem> = { ...extractedLinks.reduce((acc, item) => ({ ...acc, [item.url]: item }), {}) };
 
     const readFileAsText = (file: File): Promise<string> => {
       return new Promise((resolve) => {
@@ -72,33 +105,42 @@ export default function KeepImportModal({
 
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      if (file.type !== 'application/json' && !file.name.endsWith('.json')) {
-        continue;
-      }
-
+      const filenameLower = file.name.toLowerCase();
       const content = await readFileAsText(file);
-      try {
-        const json = JSON.parse(content);
-        const text = [json.title, json.textContent].filter(Boolean).join('\n');
-        const urls = extractUrlsFromText(text);
 
-        urls.forEach(url => {
-          // Normalize URL (strip trailing slash or hash slightly if needed, but simple string match is safest)
-          const isDup = existingVideos.some(v => v.url === url);
-          if (!linkItemsMap[url]) {
-            linkItemsMap[url] = {
-              id: `${url}-${Date.now()}-${Math.random()}`,
-              url,
-              noteTitle: json.title || 'Untitled Note',
-              isDuplicate: isDup,
-              selected: !isDup, // auto-select only non-duplicates
-              status: 'pending'
-            };
-          }
-        });
-      } catch (err) {
-        console.warn("Failed to parse JSON file", file.name, err);
+      let urls: string[] = [];
+      let sourceName = file.name;
+
+      if (filenameLower.endsWith('.json')) {
+        try {
+          const json = JSON.parse(content);
+          sourceName = json.title || file.name;
+          const text = [json.title, json.textContent].filter(Boolean).join('\n');
+          urls = extractUrlsFromText(text);
+        } catch (err) {
+          console.warn("Failed to parse JSON file", file.name, err);
+        }
+      } else if (filenameLower.endsWith('.csv')) {
+        urls = parseCsv(content);
+      } else if (filenameLower.endsWith('.txt')) {
+        urls = extractUrlsFromText(content);
+      } else {
+        urls = extractUrlsFromText(content);
       }
+
+      urls.forEach(url => {
+        const isDup = existingVideos.some(v => v.url === url);
+        if (!linkItemsMap[url]) {
+          linkItemsMap[url] = {
+            id: `${url}-${Date.now()}-${Math.random()}`,
+            url,
+            noteTitle: sourceName,
+            isDuplicate: isDup,
+            selected: !isDup,
+            status: 'pending'
+          };
+        }
+      });
     }
 
     const items = Object.values(linkItemsMap);
@@ -106,9 +148,9 @@ export default function KeepImportModal({
     setIsProcessingFiles(false);
     
     if (items.length === 0) {
-      showToast("No academic resource URLs extracted from the selected Keep files.", "info");
+      showToast("No academic resource URLs extracted from the selected files.", "info");
     } else {
-      showToast(`Successfully scanned Keep notes! Found ${items.length} unique resource links.`, "success");
+      showToast(`Scan complete. Found ${items.length} unique resource links.`, "success");
     }
   };
 
@@ -118,14 +160,49 @@ export default function KeepImportModal({
     setDragActive(false);
 
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      await processKeepFiles(e.dataTransfer.files);
+      await processImportFiles(e.dataTransfer.files);
     }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      await processKeepFiles(e.target.files);
+      await processImportFiles(e.target.files);
     }
+  };
+
+  const handleRawPasteExtract = () => {
+    if (!rawPasteText.trim()) {
+      showToast("Please enter or paste some text first.", "info");
+      return;
+    }
+
+    const urls = extractUrlsFromText(rawPasteText);
+    if (urls.length === 0) {
+      showToast("No valid URLs found in the pasted text.", "error");
+      return;
+    }
+
+    const linkItemsMap: Record<string, ExtractedLinkItem> = { ...extractedLinks.reduce((acc, item) => ({ ...acc, [item.url]: item }), {}) };
+    let addedCount = 0;
+
+    urls.forEach(url => {
+      const isDup = existingVideos.some(v => v.url === url);
+      if (!linkItemsMap[url]) {
+        linkItemsMap[url] = {
+          id: `${url}-${Date.now()}-${Math.random()}`,
+          url,
+          noteTitle: 'Pasted Raw Text',
+          isDuplicate: isDup,
+          selected: !isDup,
+          status: 'pending'
+        };
+        addedCount++;
+      }
+    });
+
+    setExtractedLinks(Object.values(linkItemsMap));
+    setRawPasteText('');
+    showToast(`Successfully extracted ${addedCount} new links from pasted text!`, "success");
   };
 
   const handleToggleSelect = (id: string) => {
@@ -136,12 +213,11 @@ export default function KeepImportModal({
 
   const handleSelectAll = (select: boolean) => {
     setExtractedLinks(prev => prev.map(item => {
-      if (item.isDuplicate) return { ...item, selected: false }; // Keep duplicates unselected
+      if (item.isDuplicate) return { ...item, selected: false };
       return { ...item, selected: select };
     }));
   };
 
-  // Run bulk import one resource at a time
   const startBulkImport = async () => {
     const selectedItems = extractedLinks.filter(item => item.selected && item.status !== 'success');
     if (selectedItems.length === 0) {
@@ -153,14 +229,13 @@ export default function KeepImportModal({
     importStopRequested.current = false;
     const newlyCurated: VideoItem[] = [];
 
-    // Reset status of pending/failed items in selection
     setExtractedLinks(prev => prev.map(item => 
       item.selected && item.status !== 'success' ? { ...item, status: 'pending', error: undefined } : item
     ));
 
     for (let i = 0; i < extractedLinks.length; i++) {
       if (importStopRequested.current) {
-        showToast("Bulk import paused/halted by user.", "info");
+        showToast("Bulk import paused by user.", "info");
         break;
       }
 
@@ -178,7 +253,7 @@ export default function KeepImportModal({
           ...curatedData,
           id: curatedData.videoId || `bulk-${Date.now()}-${Math.random()}`,
           createdAt: new Date().toISOString(),
-          watchedStatus: 'To Watch' // default Kanban column
+          watchedStatus: 'To Watch'
         };
 
         newlyCurated.push(finalVideo);
@@ -187,13 +262,12 @@ export default function KeepImportModal({
           idx === i ? { ...it, status: 'success' } : it
         ));
       } catch (err: any) {
-        console.error("Bulk item fail", item.url, err);
+        console.error("Bulk item curation error", item.url, err);
         setExtractedLinks(prev => prev.map((it, idx) => 
           idx === i ? { ...it, status: 'failed', error: err.message || "Analysis failed" } : it
         ));
       }
 
-      // Small pause between sequential requests to prevent triggering extreme rate limits
       await new Promise(resolve => setTimeout(resolve, 800));
     }
 
@@ -202,7 +276,7 @@ export default function KeepImportModal({
 
     if (newlyCurated.length > 0) {
       onImportComplete(newlyCurated);
-      showToast(`Successfully imported and curated ${newlyCurated.length} new academic resources!`, "success");
+      showToast(`Successfully curated ${newlyCurated.length} new academic resources!`, "success");
     }
   };
 
@@ -210,26 +284,25 @@ export default function KeepImportModal({
     importStopRequested.current = true;
   };
 
-  const pendingCount = extractedLinks.filter(it => it.selected && it.status === 'pending').length;
   const successCount = extractedLinks.filter(it => it.status === 'success').length;
   const failedCount = extractedLinks.filter(it => it.status === 'failed').length;
   const totalSelected = extractedLinks.filter(it => it.selected).length;
 
   return (
-    <div className="fixed inset-0 bg-brand-ink/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in select-none">
+    <div className="fixed inset-0 bg-brand-ink/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-fade-in">
       <div className="bg-brand-paper border-2 border-brand-ink rounded-3xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh] animate-scale-in">
         
         {/* Header */}
         <div className="p-5 border-b-2 border-brand-ink bg-white flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="p-2.5 bg-brand-ink text-brand-paper rounded-xl">
-              <FileJson className="w-5 h-5" />
+              <ClipboardList className="w-5 h-5" />
             </div>
             <div>
               <h3 className="text-sm font-black uppercase tracking-wider font-display text-brand-ink">
-                Google Keep Takeout Importer
+                Bulk Resource Importer
               </h3>
-              <p className="text-[10px] text-slate-500 font-semibold">Bulk-extract resource links from exported Keep JSON cards</p>
+              <p className="text-[10px] text-slate-500 font-semibold">Extract and curate multiple links in bulk</p>
             </div>
           </div>
           <button 
@@ -241,20 +314,47 @@ export default function KeepImportModal({
           </button>
         </div>
 
-        {/* Inner Content scroll area */}
+        {/* Tab Selection */}
+        <div className="border-b border-slate-150 bg-slate-50 px-5 py-2 flex gap-4">
+          <button
+            type="button"
+            disabled={isImporting}
+            onClick={() => setActiveTab('upload')}
+            className={`text-xs font-black uppercase tracking-wider py-2 px-1 border-b-2 transition-all cursor-pointer ${
+              activeTab === 'upload'
+                ? 'border-brand-ink text-brand-ink font-extrabold'
+                : 'border-transparent text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            File Upload (JSON, TXT, CSV)
+          </button>
+          <button
+            type="button"
+            disabled={isImporting}
+            onClick={() => setActiveTab('paste')}
+            className={`text-xs font-black uppercase tracking-wider py-2 px-1 border-b-2 transition-all cursor-pointer ${
+              activeTab === 'paste'
+                ? 'border-brand-ink text-brand-ink font-extrabold'
+                : 'border-transparent text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            Raw Text Paste
+          </button>
+        </div>
+
+        {/* Scroll Content */}
         <div className="flex-1 overflow-y-auto p-6 space-y-6">
           
-          {/* Step 1: Upload and parse */}
-          {extractedLinks.length === 0 && (
+          {extractedLinks.length === 0 && activeTab === 'upload' && (
             <div className="space-y-4">
               <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-start gap-3">
-                <Info className="w-4 h-4 text-indigo-500 shrink-0 mt-0.5" />
+                <Info className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
                 <div className="space-y-1 text-xs">
-                  <h4 className="font-bold text-slate-700">How to get your Keep Takeout export?</h4>
+                  <h4 className="font-bold text-slate-700">Supported Formats</h4>
                   <p className="text-slate-500 leading-relaxed font-semibold">
-                    1. Go to <a href="https://takeout.google.com" target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline font-extrabold hover:text-indigo-800">Google Takeout</a>. <br />
-                    2. Deselect all, check <strong className="text-slate-700">Keep</strong>, and request export. <br />
-                    3. Download the ZIP, extract it, and drop or select the individual <strong className="text-slate-700">.json</strong> files here!
+                    1. <strong>Google Keep JSON</strong>: Unzip your Keep Takeout folder and drop files directly.<br />
+                    2. <strong>Text Notes (.txt)</strong>: Upload any plain text file containing links.<br />
+                    3. <strong>CSV Files (.csv)</strong>: Upload standard CSV files. It will match rows containing URLs.
                   </p>
                 </div>
               </div>
@@ -268,7 +368,7 @@ export default function KeepImportModal({
                 onClick={() => fileInputRef.current?.click()}
                 className={`border-2 border-dashed rounded-2xl p-10 text-center flex flex-col items-center justify-center gap-3 cursor-pointer transition-all ${
                   dragActive 
-                    ? 'border-brand-red bg-amber-500/5' 
+                    ? 'border-brand-ink bg-slate-50' 
                     : 'border-slate-300 bg-white hover:border-brand-ink'
                 }`}
               >
@@ -276,24 +376,24 @@ export default function KeepImportModal({
                   ref={fileInputRef}
                   type="file"
                   multiple
-                  accept=".json,application/json"
+                  accept=".json,.txt,.csv,application/json,text/plain,text/csv"
                   onChange={handleFileChange}
                   className="hidden"
                 />
                 
                 {isProcessingFiles ? (
                   <>
-                    <RefreshCw className="w-10 h-10 text-brand-red animate-spin" />
-                    <p className="text-xs font-black text-brand-ink">Scrutinizing Keep cards...</p>
+                    <RefreshCw className="w-10 h-10 text-brand-ink animate-spin" />
+                    <p className="text-xs font-black text-brand-ink">Analyzing import files...</p>
                   </>
                 ) : (
                   <>
-                    <div className="w-12 h-12 bg-amber-50 rounded-full flex items-center justify-center text-amber-500 border border-amber-100">
+                    <div className="w-12 h-12 bg-slate-50 rounded-full flex items-center justify-center text-slate-500 border border-slate-100">
                       <FileJson className="w-6 h-6" />
                     </div>
                     <div className="space-y-1 max-w-xs">
-                      <p className="text-xs font-black text-brand-ink">Drag & Drop Keep JSON files</p>
-                      <p className="text-[10px] text-slate-500 leading-relaxed">Multi-select the files from your Takeout folder, or click to browse</p>
+                      <p className="text-xs font-black text-brand-ink">Drag & Drop Import files</p>
+                      <p className="text-[10px] text-slate-500 leading-relaxed">Select multiple Keep JSONs, TXT, or CSV files from your system</p>
                     </div>
                   </>
                 )}
@@ -301,11 +401,43 @@ export default function KeepImportModal({
             </div>
           )}
 
-          {/* Step 2: Extracted links & batch controls */}
+          {extractedLinks.length === 0 && activeTab === 'paste' && (
+            <div className="space-y-4">
+              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl flex items-start gap-3">
+                <Info className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
+                <div className="space-y-1 text-xs">
+                  <h4 className="font-bold text-slate-700 font-display">Extract from Block of Text</h4>
+                  <p className="text-slate-500 leading-relaxed font-semibold">
+                    Paste any block of text containing learning material links. We will extract all unique URL instances automatically.
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <textarea
+                  rows={6}
+                  value={rawPasteText}
+                  onChange={(e) => setRawPasteText(e.target.value)}
+                  placeholder="Paste raw notes, bookmarks, or reading lists here..."
+                  className="w-full p-4 border-2 border-brand-ink rounded-2xl bg-white text-xs text-brand-ink font-mono focus:outline-none placeholder-slate-400"
+                />
+                <button
+                  type="button"
+                  onClick={handleRawPasteExtract}
+                  className="w-full bg-brand-ink hover:bg-slate-800 text-brand-paper text-xs font-extrabold uppercase py-3 rounded-xl transition-colors cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <ClipboardList className="w-4 h-4" />
+                  <span>Scan and Extract URLs</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* List display */}
           {extractedLinks.length > 0 && (
             <div className="space-y-5">
               
-              {/* Batch Configuration */}
+              {/* Curation Tier */}
               <div className="bg-white border-2 border-brand-ink rounded-2xl p-4 flex flex-col md:flex-row md:items-center justify-between gap-4">
                 <div className="space-y-1.5 flex-1">
                   <h4 className="text-xs font-black text-brand-ink uppercase tracking-wide">Select Curation Tier</h4>
@@ -316,15 +448,15 @@ export default function KeepImportModal({
                       onClick={() => setImportTier('lite')}
                       className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between ${
                         importTier === 'lite'
-                          ? 'border-brand-red bg-amber-50/40 ring-1 ring-brand-red text-brand-ink'
+                          ? 'border-brand-ink bg-slate-100 ring-1 ring-brand-ink text-brand-ink'
                           : 'border-slate-200 hover:border-slate-300 text-slate-600'
                       }`}
                     >
                       <span className="text-[11px] font-black uppercase tracking-wider flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 bg-brand-red rounded-full"></span>
-                        Lite Import Pass
+                        <span className="w-1.5 h-1.5 bg-slate-900 rounded-full"></span>
+                        Lite Import
                       </span>
-                      <span className="text-[9px] text-slate-400 mt-1 font-semibold">Fast titles, 1-paragraph summaries. Uses 70% fewer tokens.</span>
+                      <span className="text-[9px] text-slate-400 mt-1 font-semibold">Fast summaries and rapid tags. Uses 70% fewer tokens.</span>
                     </button>
 
                     <button
@@ -333,26 +465,26 @@ export default function KeepImportModal({
                       onClick={() => setImportTier('deep')}
                       className={`p-2.5 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between ${
                         importTier === 'deep'
-                          ? 'border-indigo-600 bg-indigo-50/40 ring-1 ring-indigo-600 text-indigo-950'
+                          ? 'border-brand-ink bg-slate-100 ring-1 ring-brand-ink text-brand-ink'
                           : 'border-slate-200 hover:border-slate-300 text-slate-600'
                       }`}
                     >
                       <span className="text-[11px] font-black uppercase tracking-wider flex items-center gap-1">
-                        <span className="w-1.5 h-1.5 bg-indigo-600 rounded-full"></span>
+                        <span className="w-1.5 h-1.5 bg-brand-ink rounded-full"></span>
                         Deep Curation
                       </span>
-                      <span className="text-[9px] text-slate-400 mt-1 font-semibold">Exhaustive multi-paragraph summaries and scholarly deep insights.</span>
+                      <span className="text-[9px] text-slate-400 mt-1 font-semibold">Exhaustive multi-paragraph detailed analysis and deep takeaways.</span>
                     </button>
                   </div>
                 </div>
               </div>
 
-              {/* Progress Bar & Logs */}
+              {/* Progress Display */}
               {isImporting && (
                 <div className="bg-brand-ink text-brand-paper rounded-2xl p-4.5 space-y-3.5 animate-slide-in">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-extrabold uppercase tracking-widest flex items-center gap-1.5 text-brand-paper">
-                      <Loader2 className="w-4 h-4 animate-spin text-brand-red" />
+                      <Loader2 className="w-4 h-4 animate-spin text-slate-300" />
                       Active Curation Queue
                     </span>
                     <span className="font-mono text-[11px] text-slate-400">
@@ -362,7 +494,7 @@ export default function KeepImportModal({
 
                   <div className="w-full h-2 bg-slate-800 rounded-full overflow-hidden">
                     <div 
-                      className="h-full bg-brand-red transition-all duration-300"
+                      className="h-full bg-brand-paper transition-all duration-300"
                       style={{ width: `${totalSelected > 0 ? ((successCount + failedCount) / totalSelected) * 100 : 0}%` }}
                     />
                   </div>
@@ -375,7 +507,7 @@ export default function KeepImportModal({
                     <button
                       type="button"
                       onClick={handleStopImport}
-                      className="bg-brand-red hover:bg-red-700 text-white font-black text-[9px] uppercase tracking-wider px-3 py-1 rounded-lg cursor-pointer transition-colors"
+                      className="bg-brand-paper hover:bg-slate-200 text-brand-ink font-black text-[9px] uppercase tracking-wider px-3 py-1 rounded-lg cursor-pointer transition-colors"
                     >
                       Halt Import
                     </button>
@@ -383,7 +515,7 @@ export default function KeepImportModal({
                 </div>
               )}
 
-              {/* Actions Header Row */}
+              {/* Selection Controls */}
               <div className="flex items-center justify-between flex-wrap gap-2 pt-2">
                 <div className="flex items-center gap-2">
                   <button
@@ -409,7 +541,7 @@ export default function KeepImportModal({
                 </span>
               </div>
 
-              {/* Checklist list */}
+              {/* Items List */}
               <div className="space-y-2 max-h-[250px] overflow-y-auto pr-1 border border-slate-200 rounded-2xl p-2 bg-white select-text">
                 {extractedLinks.map((item, idx) => {
                   const isDup = item.isDuplicate;
@@ -419,7 +551,7 @@ export default function KeepImportModal({
                       key={item.id}
                       className={`flex items-start gap-3 p-2.5 rounded-xl border text-xs transition-all ${
                         isCurating 
-                          ? 'bg-amber-500/10 border-brand-red ring-1 ring-brand-red' 
+                          ? 'bg-slate-100 border-brand-ink ring-1 ring-brand-ink' 
                           : isDup 
                             ? 'bg-slate-50 border-slate-200 opacity-60' 
                             : 'bg-white border-slate-100 hover:border-slate-300'
@@ -433,12 +565,12 @@ export default function KeepImportModal({
                           isDup 
                             ? 'text-slate-300' 
                             : item.selected 
-                              ? 'text-brand-red' 
+                              ? 'text-brand-ink' 
                               : 'text-slate-400 hover:text-brand-ink'
                         }`}
                       >
                         {item.selected ? (
-                          <div className="w-4 h-4 bg-brand-red text-white flex items-center justify-center rounded">
+                          <div className="w-4 h-4 bg-brand-ink text-white flex items-center justify-center rounded">
                             <Check className="w-3 h-3 stroke-[4]" />
                           </div>
                         ) : (
@@ -449,10 +581,10 @@ export default function KeepImportModal({
                       <div className="flex-1 min-w-0 space-y-1">
                         <div className="flex items-center justify-between gap-2">
                           <span className="text-[10px] font-black text-slate-400 truncate max-w-[200px]">
-                            📁 From note: "{item.noteTitle}"
+                            Source: "{item.noteTitle}"
                           </span>
                           {isDup ? (
-                            <span className="text-[9px] font-black uppercase text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded">
+                            <span className="text-[9px] font-black uppercase text-slate-700 bg-slate-100 px-1.5 py-0.5 rounded">
                               Already Curated
                             </span>
                           ) : item.status === 'success' ? (
@@ -464,7 +596,7 @@ export default function KeepImportModal({
                               <AlertCircle className="w-2.5 h-2.5" /> Error
                             </span>
                           ) : isCurating ? (
-                            <span className="text-[9px] font-black uppercase text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded flex items-center gap-1 animate-pulse">
+                            <span className="text-[9px] font-black uppercase text-brand-ink bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1 animate-pulse">
                               <Loader2 className="w-2.5 h-2.5 animate-spin" /> Analyzing...
                             </span>
                           ) : (
@@ -481,7 +613,7 @@ export default function KeepImportModal({
 
                         {item.error && (
                           <p className="text-[10px] text-rose-600 font-semibold leading-relaxed">
-                            ⚠️ {item.error}
+                            {item.error}
                           </p>
                         )}
                       </div>
@@ -490,25 +622,24 @@ export default function KeepImportModal({
                 })}
               </div>
 
-              {/* Reset Upload state */}
               {!isImporting && (
                 <button
                   type="button"
                   onClick={() => setExtractedLinks([])}
-                  className="text-xs font-black text-slate-500 hover:text-brand-red block underline cursor-pointer"
+                  className="text-xs font-black text-slate-500 hover:text-brand-ink block underline cursor-pointer"
                 >
-                  Clear and start over with different Keep Takeout files
+                  Clear and start over
                 </button>
               )}
             </div>
           )}
         </div>
 
-        {/* Footer controls */}
+        {/* Footer */}
         <div className="p-5 border-t-2 border-brand-ink bg-white flex items-center justify-between flex-wrap gap-3">
           <div className="text-[10px] font-bold text-slate-400 flex items-center gap-1">
             <HelpCircle className="w-3.5 h-3.5" />
-            <span>Files are fully parsed inside your browser sandbox.</span>
+            <span>Files are parsed locally in browser sandbox.</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -525,9 +656,9 @@ export default function KeepImportModal({
                 type="button"
                 disabled={isImporting || totalSelected === 0}
                 onClick={startBulkImport}
-                className="bg-brand-red border-2 border-brand-ink hover:bg-red-700 text-white font-extrabold text-xs uppercase px-5 py-2 rounded-xl transition-all shadow-md cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                className="bg-brand-ink border-2 border-brand-ink hover:bg-slate-800 text-brand-paper font-extrabold text-xs uppercase px-5 py-2 rounded-xl transition-all shadow-md cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
               >
-                <Play className="w-3.5 h-3.5 fill-white" />
+                <Play className="w-3.5 h-3.5 fill-current" />
                 <span>Run Curation Queue</span>
               </button>
             )}

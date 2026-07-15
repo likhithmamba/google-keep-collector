@@ -10,7 +10,7 @@ import {
 } from './lib/auth';
 import { presetVideos } from './lib/presets';
 import { generateSummary } from './lib/gemini';
-import { VideoItem, KeepNote, CategoryType, LinkedAccount, AppSettings } from './types';
+import { VideoItem, KeepNote, CategoryType, LinkedAccount, AppSettings, Project } from './types';
 import SignInButton from './components/SignInButton';
 import VideoForm from './components/VideoForm';
 import VideoCard from './components/VideoCard';
@@ -23,6 +23,8 @@ import GuidedTour from './components/GuidedTour';
 import TopicDiscoveryGraph from './components/TopicDiscoveryGraph';
 import KeepImportModal from './components/KeepImportModal';
 import LeitnerStudyPanel from './components/LeitnerStudyPanel';
+import ProjectsPanel from './components/ProjectsPanel';
+import StudyDashboard from './components/StudyDashboard';
 import { 
   Sparkles, 
   Youtube, 
@@ -50,7 +52,9 @@ import {
   Plus,
   ExternalLink,
   Music,
-  Flame
+  Flame,
+  Brain,
+  Folder
 } from 'lucide-react';
 
 // Helper functions for base64 local storage obscurity
@@ -217,6 +221,41 @@ export default function App() {
   // Right panel tab and task sync triggers
   const [rightPanelTab, setRightPanelTab] = useState<'keep' | 'tasks' | 'study'>('keep');
   const [tasksTrigger, setTasksTrigger] = useState(0);
+
+  // New Dashboard and Projects views
+  const [activeMainView, setActiveMainView] = useState<'workspace' | 'dashboard' | 'projects'>('workspace');
+  const [projects, setProjects] = useState<Project[]>(() => {
+    const saved = localStorage.getItem('tubekeep_projects');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {}
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    localStorage.setItem('tubekeep_projects', JSON.stringify(projects));
+  }, [projects]);
+
+  const handleCreateProject = (name: string, description?: string) => {
+    const newProject: Project = {
+      id: `project-${Date.now()}`,
+      name,
+      description,
+      videoIds: [],
+      createdAt: new Date().toISOString()
+    };
+    setProjects(prev => [...prev, newProject]);
+  };
+
+  const handleUpdateProject = (updated: Project) => {
+    setProjects(prev => prev.map(p => p.id === updated.id ? updated : p));
+  };
+
+  const handleDeleteProject = (projectId: string) => {
+    setProjects(prev => prev.filter(p => p.id !== projectId));
+  };
 
   // New Marginalia Study & Import States
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
@@ -636,7 +675,16 @@ Synced via CurateMind AI`;
 
       const results: { email: string; success: boolean; error?: string }[] = [];
       
-      for (const account of activeAccounts) {
+      let accountsToSync = activeAccounts;
+      if (appSettings.categoryAccountMap && appSettings.categoryAccountMap[video.category]) {
+        const mappedEmail = appSettings.categoryAccountMap[video.category];
+        const matched = activeAccounts.find(acc => acc.email.toLowerCase() === mappedEmail.toLowerCase());
+        if (matched) {
+          accountsToSync = [matched];
+        }
+      }
+
+      for (const account of accountsToSync) {
         try {
           await createGoogleTask(`CurateMind: ${video.title}`, taskNotes, account.accessToken);
           results.push({ email: account.email, success: true });
@@ -782,7 +830,16 @@ Synced via CurateMind AI`;
         const taskNotes = `📌 Category: ${video.category}\n📊 Conceptual Complexity: ${video.conceptualComplexity || 'Not Analyzed'}\n🌀 Interdisciplinary Field: ${video.interdisciplinaryField || 'Not Analyzed'}\nChannel: ${video.channelTitle}\nURL: ${video.url}\n⭐ Rating: ${video.rating}/5 stars\n"${video.ratingJustification}"\n\n📝 SUMMARY:\n${video.summary}\n\n🔑 STUDY WORKSPACE CHECKLIST:\n${video.takeaways.map((t, idx) => `[ ] ${t}`).join('\n')}\n\n---\nSynced via CurateMind AI`;
 
         let anySuccess = false;
-        for (const account of activeAccounts) {
+        let accountsToSync = activeAccounts;
+        if (appSettings.categoryAccountMap && appSettings.categoryAccountMap[video.category]) {
+          const mappedEmail = appSettings.categoryAccountMap[video.category];
+          const matched = activeAccounts.find(acc => acc.email.toLowerCase() === mappedEmail.toLowerCase());
+          if (matched) {
+            accountsToSync = [matched];
+          }
+        }
+
+        for (const account of accountsToSync) {
           try {
             await createGoogleTask(`CurateMind: ${video.title}`, taskNotes, account.accessToken);
             anySuccess = true;
@@ -1032,11 +1089,74 @@ Synced via CurateMind AI`;
         </div>
       </header>
 
+      {/* Main Navigation Tabs */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-6">
+        <div className="flex bg-slate-100 p-1 rounded-2xl border border-slate-200 justify-start max-w-md">
+          <button
+            onClick={() => setActiveMainView('workspace')}
+            className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl transition-all cursor-pointer ${
+              activeMainView === 'workspace' 
+                ? 'bg-white text-slate-800 shadow-xs border border-slate-200/30 font-black' 
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <BookOpen className="w-3.5 h-3.5 text-[#C4342B]" />
+            <span>Study Workspace</span>
+          </button>
+          
+          <button
+            onClick={() => setActiveMainView('projects')}
+            className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl transition-all cursor-pointer ${
+              activeMainView === 'projects' 
+                ? 'bg-white text-slate-800 shadow-xs border border-slate-200/30 font-black' 
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Folder className="w-3.5 h-3.5 text-indigo-500" />
+            <span>Projects</span>
+          </button>
+
+          <button
+            onClick={() => setActiveMainView('dashboard')}
+            className={`flex-1 flex items-center justify-center gap-1.5 text-xs font-bold py-2 px-3 rounded-xl transition-all cursor-pointer ${
+              activeMainView === 'dashboard' 
+                ? 'bg-white text-slate-800 shadow-xs border border-slate-200/30 font-black' 
+                : 'text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <Brain className="w-3.5 h-3.5 text-emerald-500" />
+            <span>Analytics</span>
+          </button>
+        </div>
+      </div>
+
       {/* Primary Workspace Layout */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1 grid grid-cols-1 lg:grid-cols-12 gap-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 flex-1">
         
-        {/* Left 8 Columns: Video Curation Dashboard */}
-        <div className="lg:col-span-8 flex flex-col space-y-6">
+        {activeMainView === 'dashboard' && (
+          <div className="animate-fade-in">
+            <StudyDashboard videos={videos} projectsCount={projects.length} />
+          </div>
+        )}
+
+        {activeMainView === 'projects' && (
+          <div className="animate-fade-in">
+            <ProjectsPanel 
+              projects={projects}
+              videos={videos}
+              onCreateProject={handleCreateProject}
+              onUpdateProject={handleUpdateProject}
+              onDeleteProject={handleDeleteProject}
+              onSelectVideo={setSelectedVideo}
+              showToast={showToast}
+            />
+          </div>
+        )}
+
+        {activeMainView === 'workspace' && (
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 animate-fade-in">
+            {/* Left 8 Columns: Video Curation Dashboard */}
+            <div className="lg:col-span-8 flex flex-col space-y-6">
           
 
 
@@ -1595,6 +1715,8 @@ Synced via CurateMind AI`;
             )}
           </div>
         </div>
+        </div>
+        )}
 
       </main>
 

@@ -1,3 +1,24 @@
+export interface GlossaryEntry {
+  term: string;
+  definition: string;
+}
+
+export interface QuizQuestion {
+  id: string;
+  type: 'mcq' | 'short';
+  question: string;
+  options?: string[];
+  correctAnswer: string;
+}
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  videoIds: string[];
+  createdAt: string;
+}
+
 export interface Bookmark {
   id: string;
   timestamp: string;
@@ -45,6 +66,9 @@ export interface VideoItem {
       highlightReason: string;
     }>;
   };
+  projectId?: string;
+  glossary?: GlossaryEntry[];
+  quiz?: QuizQuestion[];
 }
 
 export interface KeepNote {
@@ -83,4 +107,5 @@ export interface AppSettings {
   settingsPassword?: string;
   isSettingsLocked?: boolean;
   encryptLocalStorage?: boolean;
+  categoryAccountMap?: Record<string, string>;
 }

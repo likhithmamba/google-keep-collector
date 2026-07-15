@@ -118,7 +118,7 @@ Please provide a highly complete analysis of this resource:
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         "HTTP-Referer": window.location.origin,
-        "X-Title": "Marginalia CurateMind"
+        "X-Title": "Marginalia"
       },
       body: JSON.stringify({
         model: modelName,
@@ -264,6 +264,28 @@ Please provide a highly complete analysis of this resource:
   }
 }
 
+// Client-side helper to fetch YouTube captions (JSON format)
+async function fetchYoutubeCaptions(videoId: string): Promise<string | null> {
+  if (!videoId) return null;
+  try {
+    const response = await fetch(`https://www.youtube.com/api/timedtext?v=${videoId}&lang=en&fmt=json`);
+    if (response.ok) {
+      const data = await response.json();
+      if (data && data.events) {
+        const text = data.events
+          .map((e: any) => e.segs ? e.segs.map((s: any) => s.utf8).join('') : '')
+          .join(' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        return text || null;
+      }
+    }
+  } catch (e) {
+    console.warn("Client-side direct captions fetch blocked by CORS or failed. Falling back to AI reconstruction.", e);
+  }
+  return null;
+}
+
 // Client-side Transcript Reconstructor/Generator
 export async function generateTranscript(
   url: string,
@@ -277,13 +299,16 @@ export async function generateTranscript(
     throw new Error("API Key Required: Please open Settings (gear icon) and configure your Gemini API Key or OpenRouter API Key!");
   }
 
-  const prompt = `You are an expert academic-grade educational video archivist and transcription analyst. Reconstruct a detailed, highly technical timestamped educational transcript with key segment highlights for the following resource:
+  const videoId = extractVideoId(url);
+  const captionsText = videoId ? await fetchYoutubeCaptions(videoId) : null;
+  const hasCaptions = captionsText !== null;
+
+  const prompt = `You are an expert academic-grade educational video archivist and transcription analyst. ${hasCaptions ? "Analyze the following verified transcript text to construct a detailed, beautifully structured timestamped segment transcript with key segment highlights:" : "Reconstruct a detailed, highly technical timestamped educational transcript with key segment highlights for the following resource:"}
 Title: "${title}"
 URL: "${url}"
 Summary Context: "${summary || ''}"
 
-NO CAPTIONS AVAILABLE:
-You MUST reconstruct a highly complete, comprehensive, and instructional dialogue transcript of the video's core contents divided into 6-8 chronologically progressive timestamped segment blocks based on the title and summary context.
+${hasCaptions ? `VERIFIED CAPTIONS TEXT:\n"${captionsText}"\n\nPlease structure this raw text into 6-8 chronologically progressive timestamped segment blocks. Do NOT invent information that is not present in the captions text, but present the captions' content with academic structure.` : `NO CAPTIONS AVAILABLE:\nYou MUST reconstruct a highly complete, comprehensive, and instructional dialogue transcript of the video's core contents divided into 6-8 chronologically progressive timestamped segment blocks based on the title and summary context.`}
 
 Please divide the core contents into 6-8 chronologically progressive timestamped segment blocks. Each segment must contain detailed speaker dialogue (by the host, presenter, or domain researchers), concrete technical details (like formulas, variables, code patterns, or design rules), and a highlight assessment.
 
@@ -305,7 +330,7 @@ Return the response strictly as a JSON object with:
         "Authorization": `Bearer ${apiKey}`,
         "Content-Type": "application/json",
         "HTTP-Referer": window.location.origin,
-        "X-Title": "Marginalia CurateMind"
+        "X-Title": "Marginalia"
       },
       body: JSON.stringify({
         model: modelName,
@@ -341,7 +366,11 @@ Return the response strictly as a JSON object with:
     }
     cleanText = cleanText.trim();
 
-    return JSON.parse(cleanText);
+    const parsed = JSON.parse(cleanText);
+    return {
+      ...parsed,
+      isVerified: hasCaptions
+    };
   } else {
     // Direct Gemini API Call via CORS-friendly Generative Language endpoint
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
@@ -402,6 +431,264 @@ Return the response strictly as a JSON object with:
     }
 
     trackRequest("Generate Transcript", "gemini-2.5-flash-direct", prompt, rawText);
+
+    const parsed = JSON.parse(rawText.trim());
+    return {
+      ...parsed,
+      isVerified: hasCaptions
+    };
+  }
+}
+
+// Client-side Glossary Generator
+export async function generateGlossary(
+  video: VideoItem,
+  settings: AppSettings
+): Promise<any[]> {
+  const apiKey = settings.useOpenRouter ? settings.openRouterApiKey : (settings.customGeminiApiKey || ((import.meta as any).env.VITE_GEMINI_API_KEY as string));
+  
+  if (!apiKey) {
+    throw new Error("API Key Required: Please open Settings (gear icon) and configure your Gemini API Key or OpenRouter API Key!");
+  }
+
+  const conceptTagsStr = (video.conceptTags || []).join(", ");
+  const prompt = `You are an expert academic-grade researcher and educator. Generate a precise Glossary of terms matching the provided concept tags.
+Provided Terms/Concepts: [${conceptTagsStr}]
+Video Title: "${video.title}"
+Video Summary: "${video.summary}"
+
+Write precise, high-fidelity academic definitions for each of these exact terms based on the context of the resource. Do NOT re-derive or add new terms from scratch. Only define the provided terms.
+
+Return the response strictly as a JSON array of objects, where each object has properties:
+- "term" (string, must exactly match one of the provided concept tags)
+- "definition" (string, the detailed academic definition)`;
+
+  if (settings.useOpenRouter) {
+    const modelName = settings.openRouterModel || "google/gemini-2.5-flash";
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "Marginalia"
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: [
+          {
+            role: "user",
+            content: prompt + "\n\nIMPORTANT: Return ONLY a valid JSON array matching the requested schema. Ensure the response strictly parses as JSON with array of objects having properties 'term' and 'definition'."
+          }
+        ],
+        response_format: { type: "json_object" }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenRouter API Error (${response.status}): ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.choices?.[0]?.message?.content;
+    if (!rawText) {
+      throw new Error("Empty response from OpenRouter model.");
+    }
+
+    trackRequest("Generate Glossary", modelName, prompt, rawText);
+
+    let cleanText = rawText.trim();
+    if (cleanText.startsWith("```json")) {
+      cleanText = cleanText.substring(7);
+    }
+    if (cleanText.endsWith("```")) {
+      cleanText = cleanText.substring(0, cleanText.length - 3);
+    }
+    cleanText = cleanText.trim();
+
+    return JSON.parse(cleanText);
+  } else {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                term: { type: "STRING" },
+                definition: { type: "STRING" }
+              },
+              required: ["term", "definition"]
+            }
+          }
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let parsedErr;
+      try {
+        parsedErr = JSON.parse(errText);
+      } catch (_) {}
+      const errMsg = parsedErr?.error?.message || errText;
+      throw new Error(`Gemini API Error: ${errMsg || response.statusText}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
+      throw new Error("No candidates returned from Gemini API.");
+    }
+
+    trackRequest("Generate Glossary", "gemini-2.5-flash-direct", prompt, rawText);
+
+    return JSON.parse(rawText.trim());
+  }
+}
+
+// Client-side Quiz Generator
+export async function generateQuiz(
+  video: VideoItem,
+  settings: AppSettings
+): Promise<any[]> {
+  const apiKey = settings.useOpenRouter ? settings.openRouterApiKey : (settings.customGeminiApiKey || ((import.meta as any).env.VITE_GEMINI_API_KEY as string));
+  
+  if (!apiKey) {
+    throw new Error("API Key Required: Please open Settings (gear icon) and configure your Gemini API Key or OpenRouter API Key!");
+  }
+
+  const prompt = `You are an expert educator. Generate a custom assessment quiz based on the following study materials:
+Video Title: "${video.title}"
+Video Summary: "${video.summary}"
+Key Takeaways:
+${(video.takeaways || []).map(t => `- ${t}`).join("\n")}
+
+Generate exactly 3 to 5 challenging, high-quality quiz questions that test the learner's comprehension.
+Create a mix of Multiple Choice ('mcq') and Short Answer ('short') questions.
+For MCQ questions, provide 4 options and set the correctAnswer to one of them.
+For Short Answer questions, do NOT provide options, and set the correctAnswer to a concise model answer (1-2 sentences).
+
+Return the response strictly as a JSON array of objects, where each object has:
+- "id": string (unique question identifier, e.g. "q1", "q2")
+- "type": string (either "mcq" or "short")
+- "question": string (the question text)
+- "options": array of strings (ONLY for "mcq", list exactly 4 options. Omit or leave empty for "short")
+- "correctAnswer": string (the correct choice text for MCQ, or the model answer text for Short Answer)`;
+
+  if (settings.useOpenRouter) {
+    const modelName = settings.openRouterModel || "google/gemini-2.5-flash";
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": window.location.origin,
+        "X-Title": "Marginalia"
+      },
+      body: JSON.stringify({
+        model: modelName,
+        messages: [
+          {
+            role: "user",
+            content: prompt + "\n\nIMPORTANT: Return ONLY a valid JSON array matching the requested schema. Ensure the response strictly parses as JSON with array of objects having properties 'id', 'type' ('mcq' or 'short'), 'question', 'options' (array of strings, optional) and 'correctAnswer'."
+          }
+        ],
+        response_format: { type: "json_object" }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenRouter API Error (${response.status}): ${errText || response.statusText}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.choices?.[0]?.message?.content;
+    if (!rawText) {
+      throw new Error("Empty response from OpenRouter model.");
+    }
+
+    trackRequest("Generate Quiz", modelName, prompt, rawText);
+
+    let cleanText = rawText.trim();
+    if (cleanText.startsWith("```json")) {
+      cleanText = cleanText.substring(7);
+    }
+    if (cleanText.endsWith("```")) {
+      cleanText = cleanText.substring(0, cleanText.length - 3);
+    }
+    cleanText = cleanText.trim();
+
+    return JSON.parse(cleanText);
+  } else {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            parts: [
+              { text: prompt }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                id: { type: "STRING" },
+                type: { type: "STRING" },
+                question: { type: "STRING" },
+                options: {
+                  type: "ARRAY",
+                  items: { type: "STRING" }
+                },
+                correctAnswer: { type: "STRING" }
+              },
+              required: ["id", "type", "question", "correctAnswer"]
+            }
+          }
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      let parsedErr;
+      try {
+        parsedErr = JSON.parse(errText);
+      } catch (_) {}
+      const errMsg = parsedErr?.error?.message || errText;
+      throw new Error(`Gemini API Error: ${errMsg || response.statusText}`);
+    }
+
+    const data = await response.json();
+    const rawText = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!rawText) {
+      throw new Error("No candidates returned from Gemini API.");
+    }
+
+    trackRequest("Generate Quiz", "gemini-2.5-flash-direct", prompt, rawText);
 
     return JSON.parse(rawText.trim());
   }
